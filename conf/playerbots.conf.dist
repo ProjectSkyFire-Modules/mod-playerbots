@@ -262,6 +262,67 @@ Playerbots.Init.PerTick = 5
 Playerbots.Gear.MinQuality = 2
 Playerbots.Gear.MaxQuality = 4
 
+########################################
+# autogear / maintenance chat commands
+########################################
+#
+#    Playerbots.AutoGear.Command
+#        Description: Allow the `autogear` whisper/party order. In-game syntax
+#                     (an argument can only request at or below the limits):
+#                       autogear          - upgrade worn gear slot by slot
+#                       autogear green    - cap quality (white/green/blue/
+#                                           purple/orange)
+#                       autogear 450      - cap item level
+#                       autogear match    - cap at the issuer's average ilvl
+#                       autogear reset    - wipe worn gear and regear from
+#                                           scratch (combines with the above)
+#        Default:     1
+#
+#    Playerbots.AutoGear.AltBots
+#        Description: Allow `autogear` on alt bots (characters that are neither
+#                     in the random pool nor on an AccountPrefix account).
+#        Default:     1
+#
+#    Playerbots.AutoGear.QualityLimit
+#        Description: Highest ITEM_QUALITY autogear may equip (1=normal,
+#                     2=uncommon, 3=rare, 4=epic, 5=legendary).
+#        Default:     4
+#
+#    Playerbots.AutoGear.ItemLevelLimit
+#        Description: Highest item level autogear may equip (0 = no limit).
+#                     Gear is still limited to items the bot's level can use.
+#        Default:     0
+
+Playerbots.AutoGear.Command = 1
+Playerbots.AutoGear.AltBots = 1
+Playerbots.AutoGear.QualityLimit = 4
+Playerbots.AutoGear.ItemLevelLimit = 0
+
+#
+#    Playerbots.Maintenance.Command
+#        Description: Allow the `maintenance` whisper/party order: learn
+#                     spells and proficiencies, apply recommended talents and
+#                     glyphs, riding and mounts, hunter pets, repair. Spec and
+#                     gear are kept.
+#        Default:     1
+#
+#    Playerbots.AltMaintenance.Spells
+#    Playerbots.AltMaintenance.Talents
+#    Playerbots.AltMaintenance.Glyphs
+#    Playerbots.AltMaintenance.Mounts
+#    Playerbots.AltMaintenance.Pet
+#        Description: Which parts of `maintenance` run on alt bots. Talents
+#                     replaces the alt's talent choices with the recommended
+#                     build.
+#        Default:     1
+
+Playerbots.Maintenance.Command = 1
+Playerbots.AltMaintenance.Spells = 1
+Playerbots.AltMaintenance.Talents = 1
+Playerbots.AltMaintenance.Glyphs = 1
+Playerbots.AltMaintenance.Mounts = 1
+Playerbots.AltMaintenance.Pet = 1
+
 #
 #    Playerbots.Rest.HealthPct
 #    Playerbots.Rest.ManaPct

@@ -155,6 +155,18 @@ void PlayerbotMgr::LoadConfig()
     _gearMinQuality = sConfigMgr->GetIntDefault("Playerbots.Gear.MinQuality", int(ITEM_QUALITY_UNCOMMON));
     _gearMaxQuality = sConfigMgr->GetIntDefault("Playerbots.Gear.MaxQuality", int(ITEM_QUALITY_EPIC));
 
+    _autoGearCommand = sConfigMgr->GetBoolDefault("Playerbots.AutoGear.Command", true);
+    _autoGearAltBots = sConfigMgr->GetBoolDefault("Playerbots.AutoGear.AltBots", true);
+    _autoGearQualityLimit = std::max(int(ITEM_QUALITY_NORMAL), std::min(int(ITEM_QUALITY_LEGENDARY),
+        sConfigMgr->GetIntDefault("Playerbots.AutoGear.QualityLimit", int(ITEM_QUALITY_EPIC))));
+    _autoGearItemLevelLimit = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbots.AutoGear.ItemLevelLimit", 0)));
+    _maintenanceCommand = sConfigMgr->GetBoolDefault("Playerbots.Maintenance.Command", true);
+    _altMaintenanceSpells = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Spells", true);
+    _altMaintenanceTalents = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Talents", true);
+    _altMaintenanceGlyphs = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Glyphs", true);
+    _altMaintenanceMounts = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Mounts", true);
+    _altMaintenancePet = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Pet", true);
+
     // Optional numeric thresholds (strategies themselves are runtime co/nc only).
     _restHealthPct = float(sConfigMgr->GetFloatDefault("Playerbots.Rest.HealthPct", 50.0f));
     _restManaPct = float(sConfigMgr->GetFloatDefault("Playerbots.Rest.ManaPct", 50.0f));
@@ -1934,6 +1946,27 @@ namespace
         GearPool _previous;
     };
 
+    // Autogear knobs for the current gear roll (see ScopedGearRoll).
+    struct GearRoll
+    {
+        uint32 maxItemLevel = 0; // 0 = only the level-based ceiling
+        bool incremental = false; // a slot changes only when the pick beats the worn piece
+        uint32 changed = 0;       // slots an incremental roll upgraded
+    };
+    GearRoll g_gearRoll;
+
+    struct ScopedGearRoll
+    {
+        ScopedGearRoll(uint32 maxItemLevel, bool incremental) : _previous(g_gearRoll)
+        {
+            g_gearRoll = GearRoll();
+            g_gearRoll.maxItemLevel = maxItemLevel;
+            g_gearRoll.incremental = incremental;
+        }
+        ~ScopedGearRoll() { g_gearRoll = _previous; }
+        GearRoll _previous;
+    };
+
     std::string PvpStatClause()
     {
         std::ostringstream c;
@@ -1959,7 +1992,7 @@ namespace
         // v3: broader QA/template bans + rare-low-ilvl reject + min ItemLevel floor.
         key << "v4|" << where << '|' << level << '|' << classBit << '|' << raceBit << '|'
             << minReq << '|' << qualityMin << '|' << qualityCap << '|' << primaryStat
-            << '|' << exclude << '|' << uint32(g_gearPool);
+            << '|' << exclude << '|' << uint32(g_gearPool) << '|' << g_gearRoll.maxItemLevel;
         std::string const cacheKey = key.str();
         if (auto it = g_itemQueryCache.find(cacheKey); it != g_itemQueryCache.end())
             return it->second;
@@ -1989,6 +2022,9 @@ namespace
           << " AND ItemLevel >= " << (level > 5 ? (level > 10 ? level - 5 : 3) : 1)
           << " AND (AllowableClass = -1 OR (AllowableClass & " << classBit << "))"
           << " AND (AllowableRace = -1 OR (AllowableRace & " << raceBit << "))";
+
+        if (g_gearRoll.maxItemLevel)
+            q << " AND ItemLevel <= " << g_gearRoll.maxItemLevel;
 
         if (exclude)
             q << " AND entry <> " << exclude;
@@ -2530,13 +2566,134 @@ namespace
         return bot->EquipNewItem(dest, entry, true) != nullptr;
     }
 
+    // Autogear's upgrade yardstick: item level, halved for a piece that carries
+    // another primary stat but not the one the spec wants (an earlier spec's
+    // gear). Items the bot cannot use score below an empty slot.
+    float GearScore(Player* bot, ItemTemplate const* proto, uint32 primaryStat)
+    {
+        if (!proto || bot->CanUseItem(proto) != EQUIP_ERR_OK)
+            return -1.0f;
+
+        float const score = float(proto->ItemLevel);
+        if (!primaryStat)
+            return score;
+
+        bool wanted = false;
+        bool other = false;
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_STATS; ++i)
+        {
+            uint32 const stat = proto->ItemStat[i].ItemStatType;
+            if (stat == primaryStat)
+                wanted = true;
+            else if (stat == ITEM_MOD_STRENGTH || stat == ITEM_MOD_AGILITY || stat == ITEM_MOD_INTELLECT)
+                other = true;
+        }
+        return other && !wanted ? score * 0.5f : score;
+    }
+
+    // Moves a worn piece into the backpack or a regular bag. The PvP gear bag is
+    // skipped so it keeps one piece per equipment-slot position.
+    bool StoreWornItem(Player* bot, uint8 slot)
+    {
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item || bot->CanUnequipItem(uint16(INVENTORY_SLOT_BAG_0) << 8 | slot, false) != EQUIP_ERR_OK)
+            return false;
+
+        Bag* const gearBag = BotGearSets::FindGearBag(bot);
+        std::vector<uint8> bags = { INVENTORY_SLOT_BAG_0 };
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+            if (Bag* container = bot->GetBagByPos(bag))
+                if (container != gearBag)
+                    bags.push_back(bag);
+
+        for (uint8 bag : bags)
+        {
+            ItemPosCountVec dest;
+            if (bot->CanStoreItem(bag, NULL_SLOT, dest, item, false) != EQUIP_ERR_OK)
+                continue;
+            bot->RemoveItem(INVENTORY_SLOT_BAG_0, slot, true);
+            bot->StoreItem(dest, item, true);
+            return true;
+        }
+        return false;
+    }
+
+    // Incremental autogear for one slot: equips the strongest candidate only if
+    // it beats the worn piece, which goes to the bags (AC keeps it the same way;
+    // a full bag keeps the worn piece). Returns the entry left in the slot so
+    // callers' fallbacks (2H -> 1H + shield, plate -> mail) only run when empty.
+    uint32 UpgradeSlot(Player* bot, uint8 slot, std::string const& where, uint32 primaryStat,
+        uint32 exclude, int minQuality, int maxQuality)
+    {
+        Item* worn = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        uint32 const wornEntry = worn ? worn->GetEntry() : 0;
+        float const wornScore = worn ? GearScore(bot, worn->GetTemplate(), primaryStat) : -1.0f;
+
+        uint32 const passStats[2] = { primaryStat, 0 };
+        int const passes = primaryStat && g_gearPool != GearPool::PvpOnly ? 2 : 1;
+
+        for (int p = 0; p < passes; ++p)
+        {
+            std::vector<uint32> const entries = QueryItemEntries(bot, where, passStats[p], exclude,
+                minQuality, maxQuality);
+            if (entries.empty())
+                continue;
+
+            uint32 best = 0;
+            float bestScore = wornScore;
+            for (uint32 entry : entries)
+            {
+                if (entry == wornEntry)
+                    continue;
+                float const score = GearScore(bot, sObjectMgr->GetItemTemplate(entry), primaryStat);
+                if (score <= bestScore)
+                    continue;
+                uint16 dest = 0;
+                if (bot->CanEquipNewItem(slot, dest, entry, true) != EQUIP_ERR_OK)
+                    continue;
+                best = entry;
+                bestScore = score;
+            }
+
+            if (!best)
+            {
+                if (worn)
+                    return wornEntry;
+                continue;
+            }
+
+            if (worn && !StoreWornItem(bot, slot))
+                return wornEntry;
+
+            // A two-hander needs the off hand free; keep that piece too.
+            ItemTemplate const* proto = sObjectMgr->GetItemTemplate(best);
+            if (proto && proto->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip()
+                && bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND))
+                StoreWornItem(bot, EQUIPMENT_SLOT_OFFHAND);
+
+            uint16 dest = 0;
+            if (bot->CanEquipNewItem(slot, dest, best, false) != EQUIP_ERR_OK
+                || !bot->EquipNewItem(dest, best, true))
+                return 0;
+
+            bot->AutoUnequipOffhandIfNeed();
+            ++g_gearRoll.changed;
+            return best;
+        }
+        return wornEntry;
+    }
+
     // Equips a strong item matching the WHERE clause that the bot can actually
     // use. Among the top ilvl candidates, pick randomly so bots do not all wear
     // the identical BiS-looking template. Prefers primary-stat items, then any.
     // The exclude entry keeps paired slots (rings/trinkets) distinct.
+    // slot is the equipment slot the clause fills; incremental rolls need it.
     uint32 EquipBestForSlot(Player* bot, std::string const& where, uint32 primaryStat, uint32 exclude,
-        int minQuality, int maxQuality)
+        int minQuality, int maxQuality, uint8 slot = NULL_SLOT)
     {
+        if (g_gearRoll.incremental && slot != NULL_SLOT)
+            return UpgradeSlot(bot, slot, where, primaryStat, exclude, minQuality, maxQuality);
+
         uint32 const passStats[2] = { primaryStat, 0 };
         // A PvP piece with the wrong primary stat is worse than keeping the PvE piece.
         int const passes = primaryStat && g_gearPool != GearPool::PvpOnly ? 2 : 1;
@@ -2582,9 +2739,11 @@ namespace
         uint8 const cls = bot->getClass();
         uint32 const primary = PrimaryStatForClassRole(cls, role, specId);
 
-        auto equip = [&](std::string const& where) -> bool
+        uint8 const mainHand = EQUIPMENT_SLOT_MAINHAND;
+        uint8 const offHand = EQUIPMENT_SLOT_OFFHAND;
+        auto equip = [&](std::string const& where, uint8 slot) -> bool
         {
-            return EquipBestForSlot(bot, where, primary, 0, minQuality, maxQuality) != 0;
+            return EquipBestForSlot(bot, where, primary, 0, minQuality, maxQuality, slot) != 0;
         };
 
         std::string const oneH   = "class=2 AND InventoryType IN (13,21)";
@@ -2596,39 +2755,39 @@ namespace
         switch (cls)
         {
             case CLASS_HUNTER:
-                equip(ranged);
+                equip(ranged, mainHand);
                 break;
             case CLASS_WARRIOR:
                 if (role == BOT_ROLE_TANK)
                 {
-                    if (!equip(oneH + " AND subclass IN (0,4,7)"))
-                        equip(twoH + " AND subclass IN (1,5,6,8)");
-                    equip(shield);
+                    if (!equip(oneH + " AND subclass IN (0,4,7)", mainHand))
+                        equip(twoH + " AND subclass IN (1,5,6,8)", mainHand);
+                    equip(shield, offHand);
                 }
-                else if (!equip(twoH + " AND subclass IN (1,5,6,8)"))
+                else if (!equip(twoH + " AND subclass IN (1,5,6,8)", mainHand))
                 {
-                    equip(oneH + " AND subclass IN (0,4,7)");
-                    equip(shield);
+                    equip(oneH + " AND subclass IN (0,4,7)", mainHand);
+                    equip(shield, offHand);
                 }
                 break;
             case CLASS_PALADIN:
                 if (role == BOT_ROLE_DPS)
                 {
-                    if (!equip(twoH + " AND subclass IN (1,5,6,8)"))
+                    if (!equip(twoH + " AND subclass IN (1,5,6,8)", mainHand))
                     {
-                        equip(oneH + " AND subclass IN (0,4,7)");
-                        equip(shield);
+                        equip(oneH + " AND subclass IN (0,4,7)", mainHand);
+                        equip(shield, offHand);
                     }
                 }
                 else
                 {
-                    equip(oneH + " AND subclass IN (0,4,7)");
-                    equip(shield);
+                    equip(oneH + " AND subclass IN (0,4,7)", mainHand);
+                    equip(shield, offHand);
                 }
                 break;
             case CLASS_DEATH_KNIGHT:
-                if (!equip(twoH + " AND subclass IN (1,5,6,8)"))
-                    equip(oneH + " AND subclass IN (0,4,7)");
+                if (!equip(twoH + " AND subclass IN (1,5,6,8)", mainHand))
+                    equip(oneH + " AND subclass IN (0,4,7)", mainHand);
                 break;
             case CLASS_ROGUE:
                 // Assassination (Mutilate) requires Dual Wield + daggers in both hands.
@@ -2640,72 +2799,73 @@ namespace
 
                     std::string const dagger =
                         "class=2 AND subclass=15 AND InventoryType IN (13,21,22)";
-                    uint32 const mh = EquipBestForSlot(bot, dagger, primary, 0, minQuality, maxQuality);
+                    uint32 const mh = EquipBestForSlot(bot, dagger, primary, 0, minQuality, maxQuality,
+                        mainHand);
                     uint32 oh = 0;
                     if (mh)
-                        oh = EquipBestForSlot(bot, dagger, primary, mh, minQuality, maxQuality);
+                        oh = EquipBestForSlot(bot, dagger, primary, mh, minQuality, maxQuality, offHand);
 
                     // Last resort: any 1H if the dagger pool is empty, but still
                     // force Dual Wield so an off-hand slot can fill.
                     if (!mh)
                         EquipBestForSlot(bot, oneH + " AND subclass IN (0,4,7,13,15)", primary, 0,
-                            minQuality, maxQuality);
+                            minQuality, maxQuality, mainHand);
                     if (!oh)
                         EquipBestForSlot(bot, oneH + " AND subclass IN (0,4,7,13,15)", primary,
                             bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND)
                                 ? bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND)->GetEntry()
                                 : 0,
-                            minQuality, maxQuality);
+                            minQuality, maxQuality, offHand);
                 }
                 else
                 {
                     if (!bot->HasSpell(674))
                         bot->learnSpell(674, true);
                     bot->SetCanDualWield(true);
-                    equip(oneH + " AND subclass IN (0,4,7,13,15)");
-                    equip(oneH + " AND subclass IN (0,4,7,13,15)"); // off-hand
+                    equip(oneH + " AND subclass IN (0,4,7,13,15)", mainHand);
+                    equip(oneH + " AND subclass IN (0,4,7,13,15)", offHand);
                 }
                 break;
             case CLASS_SHAMAN:
                 if (specId == SPEC_SHAMAN_ENHANCEMENT)
                 {
                     // Enhancement: dual-wield 1H.
-                    equip(oneH + " AND subclass IN (0,4,13,15)");
-                    equip(oneH + " AND subclass IN (0,4,13,15)");
+                    equip(oneH + " AND subclass IN (0,4,13,15)", mainHand);
+                    equip(oneH + " AND subclass IN (0,4,13,15)", offHand);
                 }
                 else
                 {
-                    equip(oneH + " AND subclass IN (0,4,13,15)");
-                    equip(shield);
+                    equip(oneH + " AND subclass IN (0,4,13,15)", mainHand);
+                    equip(shield, offHand);
                 }
                 break;
             case CLASS_MONK:
-                if (!equip(twoH + " AND subclass IN (6,10)"))
+                if (!equip(twoH + " AND subclass IN (6,10)", mainHand))
                 {
-                    equip(oneH + " AND subclass IN (0,4,7,13)");
-                    equip(held);
+                    equip(oneH + " AND subclass IN (0,4,7,13)", mainHand);
+                    equip(held, offHand);
                 }
                 break;
             case CLASS_DRUID:
-                if (!equip(twoH + " AND subclass IN (6,10)"))
+                if (!equip(twoH + " AND subclass IN (6,10)", mainHand))
                 {
-                    equip(oneH + " AND subclass IN (4,13,15)");
-                    equip(held);
+                    equip(oneH + " AND subclass IN (4,13,15)", mainHand);
+                    equip(held, offHand);
                 }
                 break;
             case CLASS_PRIEST:
-                if (!equip(twoH + " AND subclass=10"))
+                if (!equip(twoH + " AND subclass=10", mainHand))
                 {
-                    equip(oneH + " AND subclass IN (4,15)");
-                    equip(held);
+                    equip(oneH + " AND subclass IN (4,15)", mainHand);
+                    equip(held, offHand);
                 }
                 break;
             case CLASS_MAGE:
             case CLASS_WARLOCK:
-                if (!equip(twoH + " AND subclass=10"))
+                if (!equip(twoH + " AND subclass=10", mainHand))
                 {
-                    equip(oneH + " AND subclass IN (7,15)");
-                    equip(held);
+                    equip(oneH + " AND subclass IN (7,15)", mainHand);
+                    equip(held, offHand);
                 }
                 break;
             default:
@@ -2725,21 +2885,22 @@ namespace
         uint8 const fallbackArmor = primaryArmor == ITEM_SUBCLASS_ARMOR_PLATE
             ? uint8(ITEM_SUBCLASS_ARMOR_MAIL) : 0;
 
-        ClearEquipment(bot);
+        if (!g_gearRoll.incremental)
+            ClearEquipment(bot);
 
         // Best equippable item for a slot, optionally excluding an already-picked
         // entry (used to place two distinct rings/trinkets).
-        auto equipOne = [&](std::string const& where, uint32 exclude) -> uint32
+        auto equipOne = [&](std::string const& where, uint32 exclude, uint8 slot) -> uint32
         {
-            return EquipBestForSlot(bot, where, primary, exclude, minQuality, maxQuality);
+            return EquipBestForSlot(bot, where, primary, exclude, minQuality, maxQuality, slot);
         };
 
-        auto equipArmorSlot = [&](char const* slotClause)
+        auto equipArmorSlot = [&](char const* slotClause, uint8 equipSlot)
         {
             std::string const slot = std::string(" AND ") + slotClause;
             std::string const plateOrPrimary =
                 "class=4 AND subclass=" + std::to_string(uint32(primaryArmor)) + slot;
-            if (equipOne(plateOrPrimary, 0))
+            if (equipOne(plateOrPrimary, 0, equipSlot))
                 return;
 
             if (!fallbackArmor)
@@ -2747,34 +2908,35 @@ namespace
 
             std::string const mail =
                 "class=4 AND subclass=" + std::to_string(uint32(fallbackArmor)) + slot;
-            if (equipOne(mail, 0))
+            if (equipOne(mail, 0, equipSlot))
                 return;
 
             // Starter mail/plate is often white. The green+ band leaves those slots empty.
             if (minQuality <= int(ITEM_QUALITY_NORMAL))
                 return;
 
-            if (EquipBestForSlot(bot, plateOrPrimary, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality))
+            if (EquipBestForSlot(bot, plateOrPrimary, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality,
+                equipSlot))
                 return;
-            EquipBestForSlot(bot, mail, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality);
+            EquipBestForSlot(bot, mail, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality, equipSlot);
         };
 
-        equipArmorSlot("InventoryType=1");          // head
-        equipArmorSlot("InventoryType=3");          // shoulders
-        equipArmorSlot("InventoryType IN (5,20)");  // chest
-        equipArmorSlot("InventoryType=6");          // waist
-        equipArmorSlot("InventoryType=7");          // legs
-        equipArmorSlot("InventoryType=8");          // feet
-        equipArmorSlot("InventoryType=9");          // wrists
-        equipArmorSlot("InventoryType=10");         // hands
+        equipArmorSlot("InventoryType=1", EQUIPMENT_SLOT_HEAD);
+        equipArmorSlot("InventoryType=3", EQUIPMENT_SLOT_SHOULDERS);
+        equipArmorSlot("InventoryType IN (5,20)", EQUIPMENT_SLOT_CHEST);
+        equipArmorSlot("InventoryType=6", EQUIPMENT_SLOT_WAIST);
+        equipArmorSlot("InventoryType=7", EQUIPMENT_SLOT_LEGS);
+        equipArmorSlot("InventoryType=8", EQUIPMENT_SLOT_FEET);
+        equipArmorSlot("InventoryType=9", EQUIPMENT_SLOT_WRISTS);
+        equipArmorSlot("InventoryType=10", EQUIPMENT_SLOT_HANDS);
 
-        equipOne("class=4 AND InventoryType=2", 0);              // neck
-        equipOne("class=4 AND InventoryType=16", 0);             // cloak
+        equipOne("class=4 AND InventoryType=2", 0, EQUIPMENT_SLOT_NECK);
+        equipOne("class=4 AND InventoryType=16", 0, EQUIPMENT_SLOT_BACK);
 
-        uint32 ring1 = equipOne("class=4 AND InventoryType=11", 0);
-        equipOne("class=4 AND InventoryType=11", ring1);
-        uint32 trinket1 = equipOne("class=4 AND InventoryType=12", 0);
-        equipOne("class=4 AND InventoryType=12", trinket1);
+        uint32 ring1 = equipOne("class=4 AND InventoryType=11", 0, EQUIPMENT_SLOT_FINGER1);
+        equipOne("class=4 AND InventoryType=11", ring1, EQUIPMENT_SLOT_FINGER2);
+        uint32 trinket1 = equipOne("class=4 AND InventoryType=12", 0, EQUIPMENT_SLOT_TRINKET1);
+        equipOne("class=4 AND InventoryType=12", trinket1, EQUIPMENT_SLOT_TRINKET2);
 
         GearWeapons(bot, role, specId, minQuality, maxQuality);
     }
@@ -3103,6 +3265,131 @@ void PlayerbotMgr::InitializeBot(Player* bot, int roleOverride, uint32 specOverr
         SafeRaceName(bot->getRace()), SafeClassName(bot->getClass()),
         SpecName(specId), RoleName(role), QualityName(qualityFloor), QualityName(qualityCap),
         teleport ? ", teleported" : "");
+}
+
+namespace
+{
+    // The spec/role init keeps when given no override. Below level 10 there is
+    // no spec yet: damage role, spec 0.
+    uint32 CurrentSpecAndRole(Player* bot, BotRole& role)
+    {
+        role = BOT_ROLE_DPS;
+        if (bot->getLevel() < 10)
+            return 0;
+
+        uint32 specId = bot->GetTalentSpecialization(bot->GetActiveSpec());
+        if (!specId)
+            specId = SpecIdForRole(bot->getClass(), BOT_ROLE_DPS);
+        role = RoleFromSpec(bot->getClass(), specId);
+        return specId;
+    }
+
+    uint32 CountEquippedGear(Player* bot)
+    {
+        uint32 count = 0;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (slot != EQUIPMENT_SLOT_BODY && slot != EQUIPMENT_SLOT_TABARD
+                && bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                ++count;
+        return count;
+    }
+}
+
+bool PlayerbotMgr::IsAltBot(Player* bot) const
+{
+    if (!bot || IsRandomBot(bot->GetGUID()))
+        return false;
+
+    uint32 const accountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
+    for (BotCandidate const& candidate : _candidates)
+        if (candidate.accountId == accountId)
+            return false;
+    return true;
+}
+
+uint32 PlayerbotMgr::AutoGearBot(Player* bot, int maxItemQuality, uint32 maxItemLevel, bool reset)
+{
+    if (!bot || !bot->IsInWorld())
+        return 0;
+
+    BotRole role = BOT_ROLE_DPS;
+    uint32 const specId = CurrentSpecAndRole(bot, role);
+
+    int const qualityCap = std::max(0, std::min(maxItemQuality, int(ITEM_QUALITY_LEGENDARY)));
+    int const qualityFloor = std::min(_gearMinQuality, qualityCap);
+
+    // Proficiencies only grow with level; a bot that levelled since its last
+    // init may now wear plate/mail or a new weapon type.
+    LearnArmorProficiencies(bot);
+
+    uint32 result = 0;
+    {
+        ScopedGearRoll roll(maxItemLevel, !reset);
+        if (reset)
+        {
+            GearBotSets(bot, role, specId, qualityFloor, qualityCap);
+            result = CountEquippedGear(bot);
+        }
+        else
+        {
+            // Upgrade the PvE set; the stored PvP set is only re-rolled by reset.
+            BotGearSets::WearSet(bot, false);
+            ScopedGearPool pve(GearPool::PveOnly);
+            GearBot(bot, role, specId, qualityFloor, qualityCap);
+            result = g_gearRoll.changed;
+        }
+    }
+
+    bot->SaveToDB();
+
+    if (auto it = _ai.find(bot->GetGUID()); it != _ai.end() && it->second)
+        it->second->ResetGearSet();
+
+    SF_LOG_INFO("modules",
+        "[mod-playerbots] Autogear '%s' (%s): spec %s, gear %s-%s, item level cap %u, %u slot(s) %s.",
+        bot->GetName().c_str(), reset ? "reset" : "upgrade", SpecName(specId),
+        QualityName(qualityFloor), QualityName(qualityCap), maxItemLevel, result,
+        reset ? "equipped" : "upgraded");
+    return result;
+}
+
+void PlayerbotMgr::MaintainBot(Player* bot)
+{
+    if (!bot || !bot->IsInWorld())
+        return;
+
+    // Alt bots are real players' characters; each part can be switched off.
+    bool const alt = IsAltBot(bot);
+    auto allowed = [alt](bool altSetting) { return !alt || altSetting; };
+
+    BotRole role = BOT_ROLE_DPS;
+    uint32 const specId = CurrentSpecAndRole(bot, role);
+    // Keep the bot's spec; only pick one for a bot that never had one.
+    if (specId && !bot->GetTalentSpecialization(bot->GetActiveSpec()))
+        bot->LearnSpecialization(specId);
+
+    if (allowed(_altMaintenanceTalents))
+        BotRotation::ApplyRecommendedTalents(bot);
+    if (allowed(_altMaintenanceGlyphs))
+        BotRotation::ApplyRecommendedGlyphs(bot);
+    if (allowed(_altMaintenanceSpells))
+    {
+        LearnArmorProficiencies(bot);
+        LearnClassTrainerSpells(bot);
+        LearnLevelClassSpells(bot, specId);
+    }
+    if (allowed(_altMaintenanceMounts))
+        LearnRidingAndMounts(bot);
+    if (allowed(_altMaintenancePet))
+        FillHunterPetSlots(bot);
+
+    bot->DurabilityRepairAll(false, 1.0f, false);
+    bot->SendTalentsInfoData();
+    bot->SaveToDB();
+
+    SF_LOG_INFO("modules", "[mod-playerbots] Maintained bot '%s' (level %u %s, spec %s%s).",
+        bot->GetName().c_str(), bot->getLevel(), SafeClassName(bot->getClass()), SpecName(specId),
+        alt ? ", alt bot" : "");
 }
 
 uint32 PlayerbotMgr::EnqueueInitializeAllBots(int roleOverride, uint32 specOverride,

@@ -143,6 +143,26 @@ public:
         uint32 specOverride = 0, int maxItemQuality = -1, bool relevel = false,
         bool teleport = false, uint64 notifyPlayerGuid = 0);
     uint32 GetInitQueueSize() const { return uint32(_initQueue.size()); }
+
+    // AC `autogear`: re-gears for the bot's current spec, leaving spells and
+    // talents alone. reset=false upgrades the worn PvE set slot by slot (a slot
+    // changes only for a higher item level; the old piece goes to the bags);
+    // reset=true wipes and re-rolls both sets like init. maxItemQuality is an
+    // ITEM_QUALITY_* cap, maxItemLevel 0 = none. Returns the slots upgraded
+    // (reset: slots equipped).
+    uint32 AutoGearBot(Player* bot, int maxItemQuality, uint32 maxItemLevel, bool reset);
+    // AC `maintenance`: refreshes spells, proficiencies, talents, glyphs,
+    // riding/mounts and hunter pets, then repairs. Keeps spec and gear.
+    // Alt bots skip the parts their Playerbots.AltMaintenance.* key disables.
+    void MaintainBot(Player* bot);
+    // Not a random-pool bot and not on a bot (AccountPrefix) account.
+    bool IsAltBot(Player* bot) const;
+
+    bool IsAutoGearCommandEnabled() const { return _autoGearCommand; }
+    bool IsAutoGearAltBotsEnabled() const { return _autoGearAltBots; }
+    int GetAutoGearQualityLimit() const { return _autoGearQualityLimit; }
+    uint32 GetAutoGearItemLevelLimit() const { return _autoGearItemLevelLimit; }
+    bool IsMaintenanceCommandEnabled() const { return _maintenanceCommand; }
     uint32 GetInitPerTick() const { return _initPerTick; }
 
     // Configured AutoCreate level band (also used by init +relevel).
@@ -269,6 +289,18 @@ private:
     // Gear quality band for InitializeBot / create auto-init (ITEM_QUALITY_*).
     int _gearMinQuality = 2; // uncommon
     int _gearMaxQuality = 4; // epic
+
+    // `autogear` / `maintenance` chat commands (AC AutoGear* / *Maintenance*).
+    bool _autoGearCommand = true;
+    bool _autoGearAltBots = true;
+    int _autoGearQualityLimit = 4;    // epic, matches Gear.MaxQuality
+    uint32 _autoGearItemLevelLimit = 0; // 0 = no limit
+    bool _maintenanceCommand = true;
+    bool _altMaintenanceSpells = true;
+    bool _altMaintenanceTalents = true;
+    bool _altMaintenanceGlyphs = true;
+    bool _altMaintenanceMounts = true;
+    bool _altMaintenancePet = true;
 
     // Rest / save-mana numeric thresholds only (enable/disable is co/nc runtime).
     float _restHealthPct = 50.0f;

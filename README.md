@@ -40,8 +40,10 @@ client session:
 * You move and jump as normal.
 * In combat the AI picks a target (selection / attackers / `attack` order) and
   casts the class filler when you are in range with LoS.
-* `.playerbots init` (or whisper `autogear` / `maintenance` to a bot) refreshes
-  gear and spec. On yourself: `.playerbots init` or `.playerbots init self`.
+* `.playerbots init` refreshes gear and spec. On yourself: `.playerbots init`
+  or `.playerbots init self`. Whisper a bot `autogear` to upgrade its gear for
+  its current spec, or `maintenance` to refresh spells/talents/glyphs/mounts
+  and repair (see [COMMANDS.md](COMMANDS.md)).
 
 Toggle again or `.playerbots self off` to detach.
 

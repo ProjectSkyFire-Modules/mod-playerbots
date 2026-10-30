@@ -670,6 +670,169 @@ bool PlayerbotAI::HandleGoCommand(Player* from, std::string const& args, bool ac
     return true;
 }
 
+namespace
+{
+    // Quality words autogear accepts (AC ChatHelper::parseItemQuality).
+    bool ParseGearQuality(std::string const& token, int& qualityOut)
+    {
+        if (token == "poor" || token == "grey" || token == "gray")
+            qualityOut = ITEM_QUALITY_POOR;
+        else if (token == "common" || token == "white" || token == "normal")
+            qualityOut = ITEM_QUALITY_NORMAL;
+        else if (token == "uncommon" || token == "green")
+            qualityOut = ITEM_QUALITY_UNCOMMON;
+        else if (token == "rare" || token == "blue")
+            qualityOut = ITEM_QUALITY_RARE;
+        else if (token == "epic" || token == "purple")
+            qualityOut = ITEM_QUALITY_EPIC;
+        else if (token == "legendary" || token == "orange")
+            qualityOut = ITEM_QUALITY_LEGENDARY;
+        else
+            return false;
+        return true;
+    }
+
+    char const* GearQualityName(int quality)
+    {
+        switch (quality)
+        {
+            case ITEM_QUALITY_POOR:      return "poor";
+            case ITEM_QUALITY_NORMAL:    return "common";
+            case ITEM_QUALITY_UNCOMMON:  return "uncommon";
+            case ITEM_QUALITY_RARE:      return "rare";
+            case ITEM_QUALITY_EPIC:      return "epic";
+            case ITEM_QUALITY_LEGENDARY: return "legendary";
+            default:                     return "custom";
+        }
+    }
+
+    // Average item level over the slots the player has filled, so empty
+    // slots do not drag `autogear match` down.
+    uint32 WornItemLevelAverage(Player* player)
+    {
+        uint32 sum = 0;
+        uint32 count = 0;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+                continue;
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            {
+                sum += item->GetTemplate()->ItemLevel;
+                ++count;
+            }
+        }
+        return count ? sum / count : 0;
+    }
+}
+
+bool PlayerbotAI::HandleAutoGearCommand(Player* from, std::string const& args, bool acknowledge)
+{
+    auto reply = [&](std::string const& msg)
+    {
+        if (acknowledge)
+            ReplyTo(from, msg);
+    };
+
+    if (!sPlayerbotMgr->IsAutoGearCommandEnabled())
+    {
+        reply("autogear command is not allowed, please check the configuration.");
+        return true;
+    }
+    if (!sPlayerbotMgr->IsAutoGearAltBotsEnabled() && sPlayerbotMgr->IsAltBot(_bot))
+    {
+        reply("You cannot use autogear on alt bots.");
+        return true;
+    }
+    if (_bot->IsInCombat())
+    {
+        reply("In combat — cannot change gear.");
+        return true;
+    }
+
+    int const qualityCap = sPlayerbotMgr->GetAutoGearQualityLimit();
+    uint32 const ilvlCap = sPlayerbotMgr->GetAutoGearItemLevelLimit(); // 0 = no limit
+    int quality = qualityCap;
+    uint32 ilvl = ilvlCap;
+
+    // `reset` wipes the worn gear and regears every slot; it combines with
+    // the other options: `autogear reset green`, `autogear reset 450`.
+    std::string param = args;
+    bool reset = false;
+    if (param == "reset" || param.rfind("reset ", 0) == 0)
+    {
+        reset = true;
+        param = param.size() > 6 ? param.substr(6) : std::string();
+    }
+
+    auto capItemLevel = [&](uint32 requested)
+    {
+        ilvl = ilvlCap ? std::min(requested, ilvlCap) : requested;
+        if (ilvlCap && requested > ilvlCap)
+            reply("Config caps item level at " + std::to_string(ilvlCap) + ", gearing to that instead of "
+                + std::to_string(requested) + ".");
+    };
+
+    int requestedQuality = 0;
+    if (param.empty())
+    {
+    }
+    else if (param == "bis")
+    {
+        reply("autogear bis is not ported yet; use autogear or autogear reset.");
+        return true;
+    }
+    else if (param == "match")
+    {
+        uint32 const requested = WornItemLevelAverage(from);
+        if (!requested)
+        {
+            reply("You have no gear equipped for me to match.");
+            return true;
+        }
+        capItemLevel(requested);
+    }
+    else if (ParseGearQuality(param, requestedQuality))
+    {
+        requestedQuality = std::max(requestedQuality, int(ITEM_QUALITY_NORMAL));
+        quality = std::min(requestedQuality, qualityCap);
+        if (requestedQuality > qualityCap)
+            reply(std::string("Config limits me to ") + GearQualityName(qualityCap) + " quality, gearing to that.");
+    }
+    else
+    {
+        // Rejects negative numbers, garbage and numbers too large for an item level.
+        bool const digitsOnly = param.size() <= 5 && param.find_first_not_of("0123456789") == std::string::npos;
+        uint32 const requested = digitsOnly ? uint32(std::stoul(param)) : 0;
+        if (!requested)
+        {
+            reply("Unknown autogear option '" + param + "'. Use reset, match, a quality "
+                "(white, green, blue, purple, orange) or a positive item level number.");
+            return true;
+        }
+        if (requested <= uint32(ITEM_QUALITY_LEGENDARY))
+        {
+            reply("'" + param + "' looks like a quality. Numbers are item levels (e.g. 450); use a colour word "
+                "for quality: white, green, blue, purple, orange.");
+            return true;
+        }
+        capItemLevel(requested);
+    }
+
+    uint32 const slots = sPlayerbotMgr->AutoGearBot(_bot, quality, ilvl, reset);
+
+    std::string summary = std::string(reset ? "Regeared from scratch (" : "Auto geared (")
+        + GearQualityName(quality) + (ilvl ? ", up to item level " + std::to_string(ilvl) : std::string()) + "): ";
+    if (reset)
+        summary += std::to_string(slots) + " slot(s) equipped.";
+    else if (slots)
+        summary += std::to_string(slots) + " slot(s) upgraded.";
+    else
+        summary += "no upgrades found.";
+    reply(summary);
+    return true;
+}
+
 bool PlayerbotAI::HandlePositionCommand(Player* from, std::string const& args, bool acknowledge)
 {
     if (!_bot)
@@ -6546,7 +6709,7 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
 
     if (cmd == "help")
     {
-        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, eat/drink, maintenance, spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
+        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, eat/drink, maintenance, autogear [reset] [match|quality|ilvl], spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
         return true;
     }
 
@@ -6862,12 +7025,20 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
         return true;
     }
 
-    if (cmd == "maintenance" || cmd == "autogear")
+    if (cmd == "maintenance")
     {
-        sPlayerbotMgr->InitializeBot(_bot);
-        ack(cmd == "autogear" ? "Autogear applied." : "Maintenance applied.");
+        if (!sPlayerbotMgr->IsMaintenanceCommandEnabled())
+        {
+            ack("maintenance command is not allowed, please check the configuration.");
+            return true;
+        }
+        sPlayerbotMgr->MaintainBot(_bot);
+        ack("Maintenance done: spells, talents, glyphs, mounts and repairs refreshed.");
         return true;
     }
+
+    if (cmd == "autogear" || cmd.rfind("autogear ", 0) == 0)
+        return HandleAutoGearCommand(from, cmd == "autogear" ? std::string() : cmd.substr(9), acknowledge);
 
     if (cmd == "eat" || cmd == "drink" || cmd == "food")
     {

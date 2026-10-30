@@ -142,7 +142,17 @@ Remaining for later phases:
     (from its active specialization).
   * `pull` - tanks engage the issuer's target, or the configured RTI mark.
   * `rti` / `rti skull|cross|…` - set which raid icon bots focus (default skull).
-  * `maintenance` / `autogear` - re-run `InitializeBot` (spec + gear).
+  * `maintenance` - AC `MaintenanceAction` (`PlayerbotMgr::MaintainBot`):
+    spells, proficiencies, talents, glyphs, riding/mounts, hunter pets, repair;
+    keeps spec and gear. Alt bots honour `Playerbots.AltMaintenance.*`. Not
+    ported (no SkyFire equivalent yet): bags, food/reagents/potions,
+    enchants/gems, reputation, attunement quests, pet talents, keyring/ammo
+    (removed in MoP).
+  * `autogear [reset] [match|<quality>|<ilvl>]` - AC `AutoGearAction`
+    (`PlayerbotMgr::AutoGearBot`): incremental slot-by-slot upgrades scored by
+    item level, `reset` for a full re-roll, config caps
+    `Playerbots.AutoGear.*`. `autogear bis` is not ported (needs AC's BiS list
+    tables).
   * Party filters: `@tank` / `@dps` / `@heal` / `@ranged` before an order.
   * `help` - list orders (whisper reply). Whisper commands get a short ack;
     party/raid orders apply silently to avoid spam.

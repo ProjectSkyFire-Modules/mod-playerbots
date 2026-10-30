@@ -219,8 +219,12 @@ Send these as the message text (case-insensitive).
 | `pull` | Tank-spec bots: reach your target (or RTI mark), cast a ranged opener / taunt, then fight. |
 | `rti` / `rti skull\|…` | Set which raid icon bots focus (default skull). Tanks auto-mark that icon on an unmarked pack mob in combat. |
 | `dps attack` | Damage-role bots attack your target. |
-| `maintenance` | Re-run init (spec + gear) on that bot. |
-| `autogear` | Same as `maintenance`. |
+| `maintenance` | Keep spec and gear; learn trainer/level spells and armor proficiencies, re-apply recommended talents and glyphs, riding + mounts, fill hunter Call Pet slots, repair. Alt bots skip parts disabled by `Playerbots.AltMaintenance.*`. Off with `Playerbots.Maintenance.Command = 0`. |
+| `autogear` | Upgrade worn PvE gear for the bot's current spec: a slot changes only for a higher item level (a piece with the wrong primary stat counts half), and the old piece goes to the bags (full bags keep it). Capped by `Playerbots.AutoGear.QualityLimit` / `ItemLevelLimit`. Not in combat. |
+| `autogear reset` | Destroy worn gear and regear every slot from scratch (re-rolls the PvP set too). Combines with the options below: `autogear reset green`, `autogear reset 450`, `autogear reset match`. |
+| `autogear <quality>` | Cap quality: `white`/`common`, `green`/`uncommon`, `blue`/`rare`, `purple`/`epic`, `orange`/`legendary` (never above the config limit). |
+| `autogear <ilvl>` | Cap item level, e.g. `autogear 450` (clamped to `ItemLevelLimit` when non-zero). Numbers 0–5 are rejected as qualities. |
+| `autogear match` | Cap item level at the issuer's average equipped item level (filled slots only). |
 | `debug` / `debug on` / `debug off` | Bot says combat actions in chat (`Combat: Casting Arcane Shot`). Also `co +debug`. |
 | `eat` / `drink` / `food` | Sit and use bag food/drink (or fallback regen) until nearly full. Self-bots: AI will not stand you up or interrupt clicked food/drink; regen continues past the start threshold. |
 | `heal` | Healer-only shortcut: strict heal mode (same as `co +heal`). |
@@ -336,7 +340,8 @@ Closest equivalents for older one-shot orders:
 | Stop assisting | `passive` or `co +passive` |
 | Resume assist | `aggressive` or `co -passive` |
 | Clear bot state | `reset` |
-| Re-gear / talents refresh | `autogear` / `maintenance` or `.playerbots init` |
+| Re-gear | `autogear` / `autogear reset` or `.playerbots init` |
+| Spells / talents refresh | `maintenance` or `.playerbots init` |
 | Eat / drink | `eat` / `drink` or `nc +food` |
 | Strict healer / healer DPS | `co +heal` / `co +healer dps` |
 | Conserve healer mana | `co +save mana` |
