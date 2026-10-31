@@ -2149,6 +2149,17 @@ namespace
         return false;
     }
 
+    // Strength, agility or intellect other than the one the spec wants.
+    bool CarriesOtherPrimary(ItemTemplate const* proto, uint32 primaryStat)
+    {
+        if (!proto)
+            return false;
+        for (uint32 stat : { uint32(ITEM_MOD_STRENGTH), uint32(ITEM_MOD_AGILITY), uint32(ITEM_MOD_INTELLECT) })
+            if (stat != primaryStat && HasStat(proto, stat))
+                return true;
+        return false;
+    }
+
     std::vector<uint32> QueryItemEntries(Player* bot, std::string const& where, uint32 primaryStat,
         uint32 exclude, int minQuality, int maxQuality)
     {
@@ -2893,6 +2904,17 @@ namespace
         {
             std::vector<uint32> entries = QueryItemEntries(bot, where, passStats[p], exclude,
                 minQuality, maxQuality);
+            // Fallback pass: a piece without a primary stat (stamina, armor) beats another
+            // spec's (a strength shield for a resto shaman); those only when nothing else.
+            if (p == 1 && primaryStat)
+            {
+                std::vector<uint32> neutral;
+                for (uint32 entry : entries)
+                    if (!CarriesOtherPrimary(sObjectMgr->GetItemTemplate(entry), primaryStat))
+                        neutral.push_back(entry);
+                if (!neutral.empty())
+                    entries.swap(neutral);
+            }
             if (entries.empty())
                 continue;
 

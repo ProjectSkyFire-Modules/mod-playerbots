@@ -1011,6 +1011,27 @@ namespace
         }
         return score;
     }
+
+    // What another spec's piece is worth, as a share of its weighted stats.
+    constexpr float kWrongPrimaryFactor = 0.25f;
+
+    // True when the item carries a primary stat the spec does not use (strength, agility,
+    // intellect; spell power counts with intellect) and none that it does.
+    bool WrongPrimary(BotStatWeights const& weights, BotStatVector const& stats)
+    {
+        bool useful = false;
+        bool useless = false;
+        for (BotStat stat : { BOT_STAT_STRENGTH, BOT_STAT_AGILITY, BOT_STAT_INTELLECT, BOT_STAT_SPELL_POWER })
+        {
+            if (stats[stat] <= 0.0f)
+                continue;
+            if (weights.Get(stat) > 0.0f)
+                useful = true;
+            else
+                useless = true;
+        }
+        return useless && !useful;
+    }
 }
 
 float BotEnchants::GearValue(Player* bot, uint32 specId, ItemTemplate const* proto, Item* item, uint8 slot,
@@ -1024,6 +1045,10 @@ float BotEnchants::GearValue(Player* bot, uint32 specId, ItemTemplate const* pro
     AddTemplateStats(stats, bot, proto);
     AddRandomStats(stats, proto, item);
     float score = ValueStats(bot, weights, stats, slot, mustReachBoost);
+    // Another spec's piece (a strength shield or agility mail on a resto shaman) only
+    // counts its secondary stats; players would not take it, so it ranks far below
+    // a piece with the right primary stat.
+    bool const wrongPrimary = WrongPrimary(weights, stats);
     score += ScoreSockets(bot, specId, proto, weights);
 
     // Weapon damage drives physical specs' abilities: 1 DPS = 14 attack power,
@@ -1034,6 +1059,19 @@ float BotEnchants::GearValue(Player* bot, uint32 specId, ItemTemplate const* pro
         score += proto->DPS * 7.0f * primary;
     }
 
+    if (wrongPrimary)
+        score *= kWrongPrimaryFactor;
+
     // Breaks ties between pieces with the same weighted stats.
     return score + float(proto->ItemLevel) * 0.01f;
+}
+
+bool BotEnchants::HasWrongPrimary(Player* bot, uint32 specId, ItemTemplate const* proto, Item* item)
+{
+    if (!bot || !proto)
+        return false;
+    BotStatVector stats{};
+    AddTemplateStats(stats, bot, proto);
+    AddRandomStats(stats, proto, item);
+    return WrongPrimary(BotStatWeightTable::For(specId, bot->getClass()), stats);
 }

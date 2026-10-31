@@ -4794,6 +4794,9 @@ namespace
         if (proto->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
             worn += WornValue(bot, specId, EQUIPMENT_SLOT_OFFHAND, capBoost);
 
+        // Another spec's piece is left to the players and bots it is for (Greed).
+        if (BotEnchants::HasWrongPrimary(bot, specId, valued, item))
+            return false;
         candidate = BotEnchants::GearValue(bot, specId, valued, item, slot, capBoost);
         return candidate > 0.0f;
     }
