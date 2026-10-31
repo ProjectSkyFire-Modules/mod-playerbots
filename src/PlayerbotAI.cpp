@@ -5,6 +5,7 @@
 
 #include "PlayerbotAI.h"
 #include "PlayerbotMgr.h"
+#include "BotEnchants.h"
 #include "BotGearSets.h"
 #include "BotPreferredMounts.h"
 #include "BotTeleportMaps.h"
@@ -29,6 +30,7 @@
 #include "GroupReference.h"
 #include "Item.h"
 #include "ItemPrototype.h"
+#include "ItemScalingHooks.h"
 #include "LFGMgr.h"
 #include "LootMgr.h"
 #include "Map.h"
@@ -4655,6 +4657,136 @@ bool PlayerbotAI::HasNearbyLootPublic() const
     return const_cast<PlayerbotAI*>(this)->FindNearbyLoot() != nullptr;
 }
 
+namespace
+{
+    // Armor type the class wears for its armor specialization (cloth, leather, mail, plate);
+    // hunters, shamans, warriors and paladins move up a type at 40.
+    uint32 ClassArmorSubclass(Player* bot)
+    {
+        bool const forty = bot->getLevel() >= 40;
+        switch (bot->getClass())
+        {
+            case CLASS_WARRIOR:
+            case CLASS_PALADIN:      return forty ? ITEM_SUBCLASS_ARMOR_PLATE : ITEM_SUBCLASS_ARMOR_MAIL;
+            case CLASS_DEATH_KNIGHT: return ITEM_SUBCLASS_ARMOR_PLATE;
+            case CLASS_HUNTER:
+            case CLASS_SHAMAN:       return forty ? ITEM_SUBCLASS_ARMOR_MAIL : ITEM_SUBCLASS_ARMOR_LEATHER;
+            case CLASS_ROGUE:
+            case CLASS_DRUID:
+            case CLASS_MONK:         return ITEM_SUBCLASS_ARMOR_LEATHER;
+            default:                 return ITEM_SUBCLASS_ARMOR_CLOTH;
+        }
+    }
+
+    // Body armor of the class's own type only; cloaks, jewelry, shields and off-hands are
+    // left to CanUseItem and the stat weights.
+    bool WearsArmorType(Player* bot, ItemTemplate const* proto)
+    {
+        if (proto->Class != ITEM_CLASS_ARMOR || proto->InventoryType == INVTYPE_CLOAK)
+            return true;
+        switch (proto->SubClass)
+        {
+            case ITEM_SUBCLASS_ARMOR_CLOTH:
+            case ITEM_SUBCLASS_ARMOR_LEATHER:
+            case ITEM_SUBCLASS_ARMOR_MAIL:
+            case ITEM_SUBCLASS_ARMOR_PLATE:
+                return proto->SubClass == ClassArmorSubclass(bot);
+            default:
+                return true;
+        }
+    }
+
+    // Equipment slots an item of this type would go to (two for rings, trinkets and, for
+    // classes that dual-wield, one-hand weapons). Bows, guns and wands are main hand in MoP.
+    std::vector<uint8> RollSlots(Player* bot, ItemTemplate const* proto)
+    {
+        switch (proto->InventoryType)
+        {
+            case INVTYPE_HEAD:          return { EQUIPMENT_SLOT_HEAD };
+            case INVTYPE_NECK:          return { EQUIPMENT_SLOT_NECK };
+            case INVTYPE_SHOULDERS:     return { EQUIPMENT_SLOT_SHOULDERS };
+            case INVTYPE_CHEST:
+            case INVTYPE_ROBE:          return { EQUIPMENT_SLOT_CHEST };
+            case INVTYPE_WAIST:         return { EQUIPMENT_SLOT_WAIST };
+            case INVTYPE_LEGS:          return { EQUIPMENT_SLOT_LEGS };
+            case INVTYPE_FEET:          return { EQUIPMENT_SLOT_FEET };
+            case INVTYPE_WRISTS:        return { EQUIPMENT_SLOT_WRISTS };
+            case INVTYPE_HANDS:         return { EQUIPMENT_SLOT_HANDS };
+            case INVTYPE_FINGER:        return { EQUIPMENT_SLOT_FINGER1, EQUIPMENT_SLOT_FINGER2 };
+            case INVTYPE_TRINKET:       return { EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2 };
+            case INVTYPE_CLOAK:         return { EQUIPMENT_SLOT_BACK };
+            case INVTYPE_2HWEAPON:
+            case INVTYPE_WEAPONMAINHAND:
+            case INVTYPE_RANGED:
+            case INVTYPE_RANGEDRIGHT:
+            case INVTYPE_THROWN:        return { EQUIPMENT_SLOT_MAINHAND };
+            case INVTYPE_WEAPON:
+                if (bot->CanDualWield())
+                    return { EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND };
+                return { EQUIPMENT_SLOT_MAINHAND };
+            case INVTYPE_WEAPONOFFHAND:
+            case INVTYPE_SHIELD:
+            case INVTYPE_HOLDABLE:      return { EQUIPMENT_SLOT_OFFHAND };
+            default:                    return {};
+        }
+    }
+
+    // What the bot wears in a slot is worth, by its spec's weights (raised items at their
+    // raised level); 0 for an empty slot.
+    float WornValue(Player* bot, uint32 specId, uint8 slot, float capBoost)
+    {
+        Item* worn = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!worn || !worn->GetTemplate())
+            return 0.0f;
+        return BotEnchants::GearValue(bot, specId, worn->GetStatTemplate(), worn, slot, capBoost);
+    }
+}
+
+// Need = the item is gear the bot can use, of its own armor type, and beats what it wears
+// in that slot (the weaker of two slots; main hand + off hand for a two-hander) by at least
+// Playerbots.Loot.NeedUpgradePercent by the spec's stat weights, stats below a must-reach
+// cap counting Playerbots.Loot.CapBoost times.
+bool PlayerbotAI::IsLootUpgrade(Player* bot, ItemTemplate const* proto)
+{
+    if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+        return false;
+    if (bot->CanUseItem(proto) != EQUIP_ERR_OK || !WearsArmorType(bot, proto))
+        return false;
+
+    std::vector<uint8> const slots = RollSlots(bot, proto);
+    if (slots.empty())
+        return false;
+
+    uint32 const specId = bot->GetTalentSpecialization(bot->GetActiveSpec());
+    float const capBoost = sPlayerbotMgr->GetLootCapBoost();
+
+    uint8 slot = slots.front();
+    float worn = WornValue(bot, specId, slot, capBoost);
+    for (size_t i = 1; i < slots.size(); ++i)
+    {
+        float const value = WornValue(bot, specId, slots[i], capBoost);
+        if (value < worn)
+        {
+            worn = value;
+            slot = slots[i];
+        }
+    }
+    if (proto->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
+        worn += WornValue(bot, specId, EQUIPMENT_SLOT_OFFHAND, capBoost);
+
+    // With Destiny Weaver item scaling the bot would get the item raised to its level:
+    // roll on that version (ItemScalingHooks::LootPreview), not the base one.
+    ItemTemplate const* rolled = proto;
+    if (ItemScalingHooks::LootPreviewFn preview = ItemScalingHooks::LootPreview.load(std::memory_order_relaxed))
+        if (ItemTemplate const* raised = preview(bot, proto))
+            rolled = raised;
+
+    float const candidate = BotEnchants::GearValue(bot, specId, rolled, nullptr, slot, capBoost);
+    if (candidate <= 0.0f)
+        return false;
+    return worn <= 0.0f || candidate >= worn * (1.0f + sPlayerbotMgr->GetLootNeedUpgrade());
+}
+
 bool PlayerbotAI::HandleLootRolls()
 {
     if (!_bot || _bot->GetTypeId() != TypeID::TYPEID_PLAYER || !_bot->IsInWorld())
@@ -4674,17 +4806,11 @@ bool PlayerbotAI::HandleLootRolls()
         if (voteItr == roll->playerVote.end() || voteItr->second != RollType::MAX_ROLL_TYPE)
             continue;
 
+        // Need only on a genuine upgrade for the bot's spec; greed on everything else.
         RollType vote = RollType::ROLL_GREED;
         if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(roll->itemid))
-        {
-            // Simple heuristic: greed on most loot; need on usable weapons/armor
-            // the bot can equip (keeps LFG thresholds moving).
-            if (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR)
-            {
-                if (_bot->CanUseItem(proto) == EQUIP_ERR_OK)
-                    vote = RollType::ROLL_NEED;
-            }
-        }
+            if (IsLootUpgrade(_bot, proto))
+                vote = RollType::ROLL_NEED;
 
         // Master loot / FFA rolls still expect a vote so the timer clears.
         LootMethod const method = group->GetLootMethod();

@@ -36,10 +36,11 @@ namespace
 {
     // Defined with the gear valuation below.
     void AddEnchantStats(BotStatVector& stats, SpellItemEnchantmentEntry const* enchant, float scale);
-    // mustReach: points below a must-reach cap count kMustReachBoost times (maintenance).
+    // mustReachBoost: points below a must-reach cap count that many times (maintenance
+    // kMustReachBoost, loot rolls 1.15, 1 = no boost).
     // exclude: stats taken out of the bot's totals first (the enchant being replaced).
     float ValueStats(Player* bot, BotStatWeights const& weights, BotStatVector const& stats, uint8 slot,
-        bool mustReach = false, BotStatVector const* exclude = nullptr);
+        float mustReachBoost = 1.0f, BotStatVector const* exclude = nullptr);
     constexpr float kMustReachBoost = 10.0f;
 
     // Share of a proc's stats counted, a rough average uptime.
@@ -384,7 +385,7 @@ namespace
         float plain = 0.0f;
         for (uint32 s = 0; s < BOT_STAT_MAX; ++s)
             plain += stats[s] * weights.Get(BotStat(s));
-        return total - plain + ValueStats(bot, weights, stats, NULL_SLOT, true, &exclude);
+        return total - plain + ValueStats(bot, weights, stats, NULL_SLOT, kMustReachBoost, &exclude);
     }
 
     // Stat budget of an epic chest at the gear's item level (RandPropPoints): the
@@ -717,7 +718,7 @@ BotEnchants::Result BotEnchants::Apply(Player* bot, uint32 specId, bool enchants
         {
             if (!weights.caps.empty())
                 for (size_t i = 0; i < candidates.size(); ++i)
-                    gemScores[i] = gemEffects[i] + ValueStats(bot, weights, gemStats[i], NULL_SLOT, true);
+                    gemScores[i] = gemEffects[i] + ValueStats(bot, weights, gemStats[i], NULL_SLOT, kMustReachBoost);
             result.gems += GemItem(bot, item, weights, gemScores);
         }
     }
@@ -930,7 +931,7 @@ namespace
     // count for what they are worth there. `slot` is the equipment slot the piece would
     // take: what the piece worn there gives is taken out of the bot's totals first.
     float ValueStats(Player* bot, BotStatWeights const& weights, BotStatVector const& stats, uint8 slot,
-        bool mustReach, BotStatVector const* exclude)
+        float mustReachBoost, BotStatVector const* exclude)
     {
         float factor[BOT_STAT_MAX];
         std::fill(std::begin(factor), std::end(factor), 1.0f);
@@ -952,7 +953,7 @@ namespace
                     base += std::max(0.0f, CurrentStat(bot, BotStat(s), rating) - wornStats[s] - excluded);
                     amount += stats[s];
                 }
-                float const below = mustReach && cap.mustReach ? kMustReachBoost : 1.0f;
+                float const below = cap.mustReach ? mustReachBoost : 1.0f;
                 float const f = CapFactor(cap, bot->GetRatingMultiplier(rating), base, amount, below);
                 for (uint32 s = 0; s < BOT_STAT_MAX; ++s)
                     if (cap.statMask & (1u << s))
@@ -1012,7 +1013,8 @@ namespace
     }
 }
 
-float BotEnchants::GearValue(Player* bot, uint32 specId, ItemTemplate const* proto, Item* item, uint8 slot)
+float BotEnchants::GearValue(Player* bot, uint32 specId, ItemTemplate const* proto, Item* item, uint8 slot,
+    float mustReachBoost)
 {
     if (!bot || !proto)
         return 0.0f;
@@ -1021,7 +1023,7 @@ float BotEnchants::GearValue(Player* bot, uint32 specId, ItemTemplate const* pro
     BotStatVector stats{};
     AddTemplateStats(stats, bot, proto);
     AddRandomStats(stats, proto, item);
-    float score = ValueStats(bot, weights, stats, slot);
+    float score = ValueStats(bot, weights, stats, slot, mustReachBoost);
     score += ScoreSockets(bot, specId, proto, weights);
 
     // Weapon damage drives physical specs' abilities: 1 DPS = 14 attack power,

@@ -37,8 +37,10 @@ namespace BotEnchants
     // the piece worn in `slot`; each socket as the best gem maintenance would put
     // there, and weapon DPS for physical specs. Enchants are not counted: they do
     // not move with the item.
+    // mustReachBoost: stats below a must-reach cap (hit, expertise, spell hit, healer haste
+    // breakpoints) count that many times their weight (1 = as autogear values them).
     float GearValue(Player* bot, uint32 specId, ItemTemplate const* proto, Item* item = nullptr,
-        uint8 slot = 255);
+        uint8 slot = 255, float mustReachBoost = 1.0f);
 }
 
 #endif

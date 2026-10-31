@@ -274,7 +274,9 @@ for future updates.
   to the tank's victim; `+threat` throttles vs tank threat and pauses melee as well
   as spells. Boss/trash scripting still thin — depends on deeper rotations.
 * [DONE] Loot rolls: bots auto Need/Greed/Pass on GROUP_LOOT / NEED_BEFORE_GREED
-  (LFG). Corpse loot peels briefly when OOC with `nc +loot`.
+  (LFG). Need only on a genuine upgrade (`PlayerbotAI::IsLootUpgrade`: usable, own
+  armor type, >= `Playerbots.Loot.NeedUpgradePercent` better by the spec's stat
+  weights with must-reach caps x `Playerbots.Loot.CapBoost`), Greed otherwise. Corpse loot peels briefly when OOC with `nc +loot`.
 * [TODO] LFR: bots fill raid finder queues (auto-accept the LFR prompt/roles).
 * [TODO] Random battlegrounds / rated battlegrounds and arenas.
 * [TODO] Open-world grinding population polish (TravelNode / full quest graph still

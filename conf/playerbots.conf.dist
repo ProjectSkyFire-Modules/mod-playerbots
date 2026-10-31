@@ -409,6 +409,26 @@ Playerbots.Maintenance.StatRankStep = 0.05
 Playerbots.Maintenance.EnchantBudgetShare = 1.0
 
 #
+#    Playerbots.Loot.NeedUpgradePercent
+#        Description: Group loot rolls: a bot rolls Need only on weapons and armor it can
+#                     use, of its class's own armor type (cloth/leather/mail/plate, mail
+#                     and plate from level 40), that beat what it wears in that slot by at
+#                     least this much by its spec's stat weights (the weaker of two ring,
+#                     trinket or dual-wield slots; main hand + off hand for a two-hander).
+#                     Greed on everything else.
+#        Default:     2 (percent)
+#
+#    Playerbots.Loot.CapBoost
+#        Description: In loot rolls, stats below a cap the bot must reach (hit,
+#                     expertise, spell hit, healer haste breakpoints) count this many times
+#                     their weight, so a capped stat matters without making a caster need
+#                     a tank item for its hit. Maintenance uses 10 for gems and enchants.
+#        Default:     1.15
+
+Playerbots.Loot.NeedUpgradePercent = 2
+Playerbots.Loot.CapBoost = 1.15
+
+#
 #    Playerbots.Rest.HealthPct
 #    Playerbots.Rest.ManaPct
 #        Description: With nc +food, bots sit and regenerate when health or mana

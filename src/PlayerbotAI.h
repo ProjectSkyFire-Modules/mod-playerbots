@@ -34,6 +34,7 @@ class Creature;
 class BotAiEngine;
 class SpellInfo;
 class Item;
+struct ItemTemplate;
 class Quest;
 struct MountCapabilityEntry;
 
@@ -253,6 +254,7 @@ private:
     // False while the master is moving or far ahead (keep following; no convoy stutter).
     bool IsMasterWaitingForRest() const;
     bool HandleLootRolls();
+    static bool IsLootUpgrade(Player* bot, ItemTemplate const* proto);
 
     // AC-style co / nc strategy engine (role-gated).
     bool HandleStrategyCommand(Player* from, std::string const& cmd, bool acknowledge);

@@ -172,6 +172,8 @@ void PlayerbotMgr::LoadConfig()
     _altMaintenancePet = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Pet", true);
     _altMaintenanceBags = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Bags", true);
     _maintenanceBagEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbots.Maintenance.BagEntry", 82446)));
+    _lootNeedUpgrade = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbots.Loot.NeedUpgradePercent", 2.0f)) / 100.0f;
+    _lootCapBoost = std::max(1.0f, sConfigMgr->GetFloatDefault("Playerbots.Loot.CapBoost", 1.15f));
     _maintenanceEnchants = sConfigMgr->GetBoolDefault("Playerbots.Maintenance.Enchants", true);
     _maintenanceGems = sConfigMgr->GetBoolDefault("Playerbots.Maintenance.Gems", true);
     _altMaintenanceEnchants = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Enchants", true);

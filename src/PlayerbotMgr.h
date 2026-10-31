@@ -169,6 +169,10 @@ public:
 
     bool IsAutoGearCommandEnabled() const { return _autoGearCommand; }
     bool IsAutoGearAltBotsEnabled() const { return _autoGearAltBots; }
+    // Loot rolls: Need when an item beats the worn one by this share (0.02 = 2%), with stats
+    // below a must-reach cap counted _lootCapBoost times.
+    float GetLootNeedUpgrade() const { return _lootNeedUpgrade; }
+    float GetLootCapBoost() const { return _lootCapBoost; }
     int GetAutoGearQualityLimit() const { return _autoGearQualityLimit; }
     uint32 GetAutoGearItemLevelLimit() const { return _autoGearItemLevelLimit; }
     bool IsMaintenanceCommandEnabled() const { return _maintenanceCommand; }
@@ -324,6 +328,8 @@ private:
     bool _altMaintenancePet = true;
     bool _altMaintenanceBags = true;
     uint32 _maintenanceBagEntry = 82446; // Royal Satchel, 28 slots
+    float _lootNeedUpgrade = 0.02f;
+    float _lootCapBoost = 1.15f;
     bool _maintenanceEnchants = true;
     bool _maintenanceGems = true;
     bool _altMaintenanceEnchants = true;
