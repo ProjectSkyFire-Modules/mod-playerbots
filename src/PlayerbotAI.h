@@ -324,6 +324,8 @@ private:
     bool BeginTravelTo(float x, float y, float z, Player* from, bool acknowledge);
     bool HandleGoCommand(Player* from, std::string const& args, bool acknowledge);
     bool HandlePositionCommand(Player* from, std::string const& args, bool acknowledge);
+    // AC `autogear [reset] [match|<quality>|<item level>]`.
+    bool HandleAutoGearCommand(Player* from, std::string const& args, bool acknowledge);
 
     Creature* FindNearbyLoot();
     Creature* FindNearbyRepairer();
