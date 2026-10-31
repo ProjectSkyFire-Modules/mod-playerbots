@@ -168,6 +168,11 @@ public:
     BotTargetValues& GetTargetValues() { return _targets; }
     BotTargetValues const& GetTargetValues() const { return _targets; }
 
+    // Equips bag items that beat the worn ones (the Need rule); names of what was equipped.
+    uint32 EquipBagUpgrades(std::vector<std::string>* equipped = nullptr);
+    // A new item reached the bags (loot, roll won, quest reward): check for upgrades soon.
+    void QueueEquipUpgrades() { _equipUpgradesPending = true; }
+
 private:
     // Coarse combat role used by filters and strategy gating.
     enum class CombatRole { Tank, Healer, Damage };
@@ -366,6 +371,9 @@ private:
     uint32 _strandedCheckTimer = 0;
     // Gear set fully swapped in: 1 PvP, 0 PvE, -1 not settled yet.
     int8 _gearSetPvp = -1;
+    // Automatic bag upgrades: requested by a new item, else every Playerbots.AutoEquip.Interval.
+    bool _equipUpgradesPending = true;
+    uint32 _equipUpgradesTimer = 0;
     // spellId -> getMSTime() until which the rotation skips it.
     std::unordered_map<uint32, uint32> _spellBackoff;
     // spellId -> (target GUID, getMSTime() of the cast).

@@ -173,6 +173,9 @@ public:
     // below a must-reach cap counted _lootCapBoost times.
     float GetLootNeedUpgrade() const { return _lootNeedUpgrade; }
     float GetLootCapBoost() const { return _lootCapBoost; }
+    // Automatic equipping of bag upgrades: on for random bots, alts only with .Alts.
+    bool ShouldAutoEquip(Player* bot) const;
+    uint32 GetAutoEquipInterval() const { return _autoEquipInterval; }
     int GetAutoGearQualityLimit() const { return _autoGearQualityLimit; }
     uint32 GetAutoGearItemLevelLimit() const { return _autoGearItemLevelLimit; }
     bool IsMaintenanceCommandEnabled() const { return _maintenanceCommand; }
@@ -330,6 +333,9 @@ private:
     uint32 _maintenanceBagEntry = 82446; // Royal Satchel, 28 slots
     float _lootNeedUpgrade = 0.02f;
     float _lootCapBoost = 1.15f;
+    bool _autoEquip = true;
+    bool _autoEquipAlts = false;
+    uint32 _autoEquipInterval = 60000;
     bool _maintenanceEnchants = true;
     bool _maintenanceGems = true;
     bool _altMaintenanceEnchants = true;

@@ -174,6 +174,9 @@ void PlayerbotMgr::LoadConfig()
     _maintenanceBagEntry = uint32(std::max(0, sConfigMgr->GetIntDefault("Playerbots.Maintenance.BagEntry", 82446)));
     _lootNeedUpgrade = std::max(0.0f, sConfigMgr->GetFloatDefault("Playerbots.Loot.NeedUpgradePercent", 2.0f)) / 100.0f;
     _lootCapBoost = std::max(1.0f, sConfigMgr->GetFloatDefault("Playerbots.Loot.CapBoost", 1.15f));
+    _autoEquip = sConfigMgr->GetBoolDefault("Playerbots.AutoEquip.Enable", true);
+    _autoEquipAlts = sConfigMgr->GetBoolDefault("Playerbots.AutoEquip.Alts", false);
+    _autoEquipInterval = uint32(std::max(5, sConfigMgr->GetIntDefault("Playerbots.AutoEquip.Interval", 60))) * IN_MILLISECONDS;
     _maintenanceEnchants = sConfigMgr->GetBoolDefault("Playerbots.Maintenance.Enchants", true);
     _maintenanceGems = sConfigMgr->GetBoolDefault("Playerbots.Maintenance.Gems", true);
     _altMaintenanceEnchants = sConfigMgr->GetBoolDefault("Playerbots.AltMaintenance.Enchants", true);
@@ -3559,6 +3562,11 @@ bool PlayerbotMgr::IsAltBot(Player* bot) const
 
     uint32 const accountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
     return !IsBotAccount(accountId);
+}
+
+bool PlayerbotMgr::ShouldAutoEquip(Player* bot) const
+{
+    return _autoEquip && bot && (_autoEquipAlts || !IsAltBot(bot));
 }
 
 uint32 PlayerbotMgr::AutoGearBot(Player* bot, int maxItemQuality, uint32 maxItemLevel, bool reset)

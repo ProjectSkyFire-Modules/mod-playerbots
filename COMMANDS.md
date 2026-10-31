@@ -225,6 +225,7 @@ Send these as the message text (case-insensitive).
 | `autogear <quality>` | Cap quality: `white`/`common`, `green`/`uncommon`, `blue`/`rare`, `purple`/`epic`, `orange`/`legendary` (never above the config limit). |
 | `autogear <ilvl>` | Cap item level, e.g. `autogear 450` (clamped to `ItemLevelLimit` when non-zero). Numbers 0–5 are rejected as qualities. |
 | `autogear match` | Cap item level at the issuer's average equipped item level (filled slots only). |
+| `equip upgrades` / `equip upgrade` | Equip every bag item that beats what the bot wears (same rule as a Need roll: usable, own armor type, 2% better by the spec's stat weights) and say what was equipped. Works on alts too. Random bots also do it on their own (`Playerbots.AutoEquip.*`). |
 | `debug` / `debug on` / `debug off` | Bot says combat actions in chat (`Combat: Casting Arcane Shot`). Also `co +debug`. |
 | `eat` / `drink` / `food` | Sit and use bag food/drink (or fallback regen) until nearly full. Self-bots: AI will not stand you up or interrupt clicked food/drink; regen continues past the start threshold. |
 | `heal` | Healer-only shortcut: strict heal mode (same as `co +heal`). |

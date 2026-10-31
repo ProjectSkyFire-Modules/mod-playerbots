@@ -1331,6 +1331,18 @@ void PlayerbotAI::UpdateAI(uint32 diff)
             BotGearSets::WearSet(_bot, wantPvp != 0);
             _gearSetPvp = wantPvp;
         }
+
+        // Equip bag upgrades (AzerothCore's AutoEquipUpgradeLoot), once the PvE set is on.
+        if (_gearSetPvp == 0 && sPlayerbotMgr->ShouldAutoEquip(_bot))
+        {
+            _equipUpgradesTimer += BOT_AI_UPDATE_INTERVAL;
+            if (_equipUpgradesPending || _equipUpgradesTimer >= sPlayerbotMgr->GetAutoEquipInterval())
+            {
+                _equipUpgradesPending = false;
+                _equipUpgradesTimer = 0;
+                EquipBagUpgrades();
+            }
+        }
     }
 
     // Keep raid/self buffs topped up out of combat when not mid-cast.
@@ -4742,38 +4754,98 @@ namespace
     }
 }
 
+namespace
+{
+    // An item against what the bot wears where it would go: false when it is not gear the bot
+    // can use or wear (armor type), else the slot it would replace (the weaker of two ring,
+    // trinket or dual-wield slots; main hand + off hand for a two-hander), the worn value and
+    // the candidate's value, by the spec's stat weights. `valued` is the template the item is
+    // valued at (a raised version), `item` the bag copy if there is one.
+    bool CompareToWorn(Player* bot, ItemTemplate const* proto, ItemTemplate const* valued, Item* item,
+        uint8& slot, float& worn, float& candidate)
+    {
+        if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+            return false;
+        if (bot->CanUseItem(proto) != EQUIP_ERR_OK || !WearsArmorType(bot, proto))
+            return false;
+
+        std::vector<uint8> slots = RollSlots(bot, proto);
+        // A one-hander or off-hand next to a worn two-hander would only unequip it.
+        Item* mainHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+        if (mainHand && mainHand->GetTemplate()->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
+            slots.erase(std::remove(slots.begin(), slots.end(), uint8(EQUIPMENT_SLOT_OFFHAND)), slots.end());
+        if (slots.empty())
+            return false;
+
+        uint32 const specId = bot->GetTalentSpecialization(bot->GetActiveSpec());
+        float const capBoost = sPlayerbotMgr->GetLootCapBoost();
+
+        slot = slots.front();
+        worn = WornValue(bot, specId, slot, capBoost);
+        for (size_t i = 1; i < slots.size(); ++i)
+        {
+            float const value = WornValue(bot, specId, slots[i], capBoost);
+            if (value < worn)
+            {
+                worn = value;
+                slot = slots[i];
+            }
+        }
+        if (proto->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
+            worn += WornValue(bot, specId, EQUIPMENT_SLOT_OFFHAND, capBoost);
+
+        candidate = BotEnchants::GearValue(bot, specId, valued, item, slot, capBoost);
+        return candidate > 0.0f;
+    }
+
+    bool BeatsWorn(float worn, float candidate)
+    {
+        return worn <= 0.0f || candidate >= worn * (1.0f + sPlayerbotMgr->GetLootNeedUpgrade());
+    }
+
+    // Moves the worn off hand into a free backpack or regular bag slot (never the PvP gear
+    // bag, which keeps one piece per equipment-slot position). False when there is no room.
+    bool StoreOffHand(Player* bot)
+    {
+        Item* offHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        if (!offHand)
+            return true;
+        if (bot->CanUnequipItem(uint16(INVENTORY_SLOT_BAG_0) << 8 | EQUIPMENT_SLOT_OFFHAND, false) != EQUIP_ERR_OK)
+            return false;
+
+        Bag* const gearBag = BotGearSets::FindGearBag(bot);
+        auto tryStore = [&](uint8 bag, uint8 slot)
+        {
+            if (bot->GetItemByPos(bag, slot))
+                return false;
+            ItemPosCountVec dest;
+            if (bot->CanStoreItem(bag, slot, dest, offHand, false) != EQUIP_ERR_OK)
+                return false;
+            bot->RemoveItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+            bot->StoreItem(dest, offHand, true);
+            return true;
+        };
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (tryStore(INVENTORY_SLOT_BAG_0, slot))
+                return true;
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        {
+            Bag* container = bot->GetBagByPos(bag);
+            if (!container || container == gearBag)
+                continue;
+            for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                if (tryStore(bag, uint8(slot)))
+                    return true;
+        }
+        return false;
+    }
+}
+
 // Need = the item is gear the bot can use, of its own armor type, and beats what it wears
-// in that slot (the weaker of two slots; main hand + off hand for a two-hander) by at least
-// Playerbots.Loot.NeedUpgradePercent by the spec's stat weights, stats below a must-reach
-// cap counting Playerbots.Loot.CapBoost times.
+// in that slot by at least Playerbots.Loot.NeedUpgradePercent by the spec's stat weights,
+// stats below a must-reach cap counting Playerbots.Loot.CapBoost times.
 bool PlayerbotAI::IsLootUpgrade(Player* bot, ItemTemplate const* proto)
 {
-    if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
-        return false;
-    if (bot->CanUseItem(proto) != EQUIP_ERR_OK || !WearsArmorType(bot, proto))
-        return false;
-
-    std::vector<uint8> const slots = RollSlots(bot, proto);
-    if (slots.empty())
-        return false;
-
-    uint32 const specId = bot->GetTalentSpecialization(bot->GetActiveSpec());
-    float const capBoost = sPlayerbotMgr->GetLootCapBoost();
-
-    uint8 slot = slots.front();
-    float worn = WornValue(bot, specId, slot, capBoost);
-    for (size_t i = 1; i < slots.size(); ++i)
-    {
-        float const value = WornValue(bot, specId, slots[i], capBoost);
-        if (value < worn)
-        {
-            worn = value;
-            slot = slots[i];
-        }
-    }
-    if (proto->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
-        worn += WornValue(bot, specId, EQUIPMENT_SLOT_OFFHAND, capBoost);
-
     // With Destiny Weaver item scaling the bot would get the item raised to its level:
     // roll on that version (ItemScalingHooks::LootPreview), not the base one.
     ItemTemplate const* rolled = proto;
@@ -4781,10 +4853,93 @@ bool PlayerbotAI::IsLootUpgrade(Player* bot, ItemTemplate const* proto)
         if (ItemTemplate const* raised = preview(bot, proto))
             rolled = raised;
 
-    float const candidate = BotEnchants::GearValue(bot, specId, rolled, nullptr, slot, capBoost);
-    if (candidate <= 0.0f)
-        return false;
-    return worn <= 0.0f || candidate >= worn * (1.0f + sPlayerbotMgr->GetLootNeedUpgrade());
+    uint8 slot = 0;
+    float worn = 0.0f;
+    float candidate = 0.0f;
+    return CompareToWorn(bot, proto, rolled, nullptr, slot, worn, candidate) && BeatsWorn(worn, candidate);
+}
+
+// Equips every bag item that beats what the bot wears by the same rule as a Need roll (as
+// AzerothCore's "equip upgrades"), best gain first. The PvP gear bag is never searched.
+// The replaced piece goes where the new one was. Returns how many items were equipped.
+uint32 PlayerbotAI::EquipBagUpgrades(std::vector<std::string>* equipped)
+{
+    if (!_bot || !_bot->IsInWorld() || !_bot->IsAlive() || _bot->IsInCombat())
+        return 0;
+    // The PvP set is worn there; it is swapped back by WearSet afterwards.
+    if (_bot->GetMap()->IsBattlegroundOrArena())
+        return 0;
+
+    Bag* const gearBag = BotGearSets::FindGearBag(_bot);
+    std::unordered_set<uint64> skipped;
+    uint32 count = 0;
+
+    for (uint32 pass = 0; pass < 2 * EQUIPMENT_SLOT_END; ++pass)
+    {
+        Item* best = nullptr;
+        uint8 bestSlot = 0;
+        float bestGain = 0.0f;
+
+        auto consider = [&](Item* item)
+        {
+            if (!item || item->IsInTrade() || skipped.count(item->GetGUID()))
+                return;
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || proto->InventoryType == INVTYPE_NON_EQUIP)
+                return;
+
+            uint8 slot = 0;
+            float worn = 0.0f;
+            float candidate = 0.0f;
+            if (!CompareToWorn(_bot, proto, item->GetStatTemplate(), item, slot, worn, candidate)
+                || !BeatsWorn(worn, candidate))
+                return;
+
+            // An empty slot is the biggest gain of all.
+            float const gain = worn > 0.0f ? candidate / worn : 1000.0f + candidate;
+            if (gain > bestGain)
+            {
+                best = item;
+                bestSlot = slot;
+                bestGain = gain;
+            }
+        };
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            consider(_bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        {
+            Bag* container = _bot->GetBagByPos(bag);
+            if (!container || container == gearBag)
+                continue;
+            for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                consider(container->GetItemByPos(uint8(slot)));
+        }
+        if (!best)
+            break;
+
+        uint16 dest = 0;
+        bool const twoHand = best->GetTemplate()->InventoryType == INVTYPE_2HWEAPON && !_bot->CanTitanGrip();
+        if (_bot->CanEquipItem(bestSlot, dest, best, true) != EQUIP_ERR_OK || (twoHand && !StoreOffHand(_bot)))
+        {
+            skipped.insert(best->GetGUID());
+            continue;
+        }
+
+        std::string const name = best->GetTemplate()->Name1;
+        _bot->SwapItem(best->GetPos(), uint16(INVENTORY_SLOT_BAG_0) << 8 | bestSlot);
+        if (_bot->GetItemByPos(INVENTORY_SLOT_BAG_0, bestSlot) != best)
+        {
+            skipped.insert(best->GetGUID());
+            continue;
+        }
+
+        ++count;
+        if (equipped)
+            equipped->push_back(name);
+        SF_LOG_DEBUG("modules", "[mod-playerbots] %s equipped upgrade %s", _bot->GetName().c_str(), name.c_str());
+    }
+    return count;
 }
 
 bool PlayerbotAI::HandleLootRolls()
@@ -7379,6 +7534,28 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
 
     if (cmd == "autogear" || cmd.rfind("autogear ", 0) == 0)
         return HandleAutoGearCommand(from, cmd == "autogear" ? std::string() : cmd.substr(9), acknowledge);
+
+    // Ordered by the player, so alts do it too.
+    if (cmd == "equip upgrades" || cmd == "equip upgrade")
+    {
+        if (_bot->IsInCombat())
+        {
+            ack("In combat — cannot change gear.");
+            return true;
+        }
+        std::vector<std::string> equipped;
+        EquipBagUpgrades(&equipped);
+        if (equipped.empty())
+            ack("No upgrades in my bags.");
+        else
+        {
+            std::string text = "Equipped:";
+            for (size_t i = 0; i < equipped.size(); ++i)
+                text += (i ? ", " : " ") + equipped[i];
+            ack(text.c_str());
+        }
+        return true;
+    }
 
     if (cmd == "eat" || cmd == "drink" || cmd == "food")
     {

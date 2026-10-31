@@ -112,6 +112,18 @@ public:
         }
     }
 
+    // A bot that loots an item, wins a roll or gets a quest reward checks its bags for
+    // upgrades on its next AI tick (after Destiny Weaver raised the item).
+    void OnLootItem(Player* player, Item* /*item*/, uint32 /*count*/) override
+    {
+        QueueEquipUpgrades(player);
+    }
+
+    void OnQuestRewardItem(Player* player, Item* /*item*/, Quest const* /*quest*/) override
+    {
+        QueueEquipUpgrades(player);
+    }
+
     // When a real player (or self-bot) turns a quest in, grouped bots on the same
     // map that have it complete turn it in too, so the next quest of a chain is
     // open to them and their log does not fill up with finished quests.
@@ -137,6 +149,15 @@ public:
             if (PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(member))
                 ai->MirrorQuestReward(player, quest, questGiver);
         }
+    }
+
+private:
+    static void QueueEquipUpgrades(Player* player)
+    {
+        if (!sPlayerbotMgr->IsEnabled() || !player)
+            return;
+        if (PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(player))
+            ai->QueueEquipUpgrades();
     }
 };
 

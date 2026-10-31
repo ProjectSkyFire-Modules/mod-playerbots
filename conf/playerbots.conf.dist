@@ -429,6 +429,30 @@ Playerbots.Loot.NeedUpgradePercent = 2
 Playerbots.Loot.CapBoost = 1.15
 
 #
+#    Playerbots.AutoEquip.Enable
+#        Description: Bots equip items from their bags that are upgrades, by the same rule
+#                     as a Need roll (Playerbots.Loot.NeedUpgradePercent and .CapBoost):
+#                     right after looting, winning a roll or a quest reward, and every
+#                     Playerbots.AutoEquip.Interval seconds out of combat (trades, mail,
+#                     purchases). Not in battlegrounds or arenas (the PvP set is worn
+#                     there); the PvP gear bag is never searched. The replaced piece goes
+#                     to the bag slot the new one came from.
+#        Default:     1
+#
+#    Playerbots.AutoEquip.Alts
+#        Description: Also on alt bots (characters of real players). Off by default: alts
+#                     change only when their player orders it ("equip upgrades").
+#        Default:     0
+#
+#    Playerbots.AutoEquip.Interval
+#        Description: Seconds between bag checks out of combat (minimum 5).
+#        Default:     60
+
+Playerbots.AutoEquip.Enable = 1
+Playerbots.AutoEquip.Alts = 0
+Playerbots.AutoEquip.Interval = 60
+
+#
 #    Playerbots.Rest.HealthPct
 #    Playerbots.Rest.ManaPct
 #        Description: With nc +food, bots sit and regenerate when health or mana

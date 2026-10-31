@@ -277,6 +277,10 @@ for future updates.
   (LFG). Need only on a genuine upgrade (`PlayerbotAI::IsLootUpgrade`: usable, own
   armor type, >= `Playerbots.Loot.NeedUpgradePercent` better by the spec's stat
   weights with must-reach caps x `Playerbots.Loot.CapBoost`), Greed otherwise. Corpse loot peels briefly when OOC with `nc +loot`.
+* [DONE] Equip upgrades (AC `AutoEquipUpgradeLoot` / `equip upgrade`): bots equip bag items
+  that beat the worn piece by the Need rule, after loot, won rolls and quest rewards and every
+  `Playerbots.AutoEquip.Interval` s out of combat; never from the PvP gear bag, not in
+  battlegrounds/arenas. Alts only on `equip upgrades` unless `Playerbots.AutoEquip.Alts = 1`.
 * [TODO] LFR: bots fill raid finder queues (auto-accept the LFR prompt/roles).
 * [TODO] Random battlegrounds / rated battlegrounds and arenas.
 * [TODO] Open-world grinding population polish (TravelNode / full quest graph still
