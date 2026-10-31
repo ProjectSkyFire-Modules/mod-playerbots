@@ -726,6 +726,210 @@ namespace
     }
 }
 
+namespace
+{
+    std::string QuestLink(Quest const* quest)
+    {
+        std::ostringstream out;
+        out << "|cffffff00|Hquest:" << quest->GetQuestId() << ':' << quest->GetQuestLevel() << "|h["
+            << quest->GetTitle() << "]|h|r";
+        return out.str();
+    }
+
+    // An objective's name: its own text, else what it asks for.
+    std::string QuestObjectiveLabel(QuestObjective const* objective)
+    {
+        if (!objective->Description.empty())
+            return objective->Description;
+        switch (objective->Type)
+        {
+            case QUEST_OBJECTIVE_TYPE_NPC:
+            case QUEST_OBJECTIVE_TYPE_NPC_INTERACT:
+                if (CreatureTemplate const* creature = sObjectMgr->GetCreatureTemplate(objective->ObjectId))
+                    return creature->Name;
+                break;
+            case QUEST_OBJECTIVE_TYPE_ITEM:
+                if (ItemTemplate const* item = sObjectMgr->GetItemTemplate(objective->ObjectId))
+                    return item->Name1;
+                break;
+            case QUEST_OBJECTIVE_TYPE_GO:
+                if (GameObjectTemplate const* go = sObjectMgr->GetGameObjectTemplate(objective->ObjectId))
+                    return go->name;
+                break;
+            default:
+                break;
+        }
+        return "objective";
+    }
+}
+
+void PlayerbotAI::MirrorQuestAccept(Player* master, Quest const* quest)
+{
+    if (!master || !quest || !_bot)
+        return;
+
+    uint32 const questId = quest->GetQuestId();
+    // Already on it or done with it, or a quest of another class / race: nothing to say.
+    if (_bot->GetQuestStatus(questId) != QUEST_STATUS_NONE || _bot->GetQuestRewardStatus(questId)
+        || !_bot->SatisfyQuestClass(quest, false) || !_bot->SatisfyQuestRace(quest, false))
+        return;
+
+    if (_bot->CanTakeQuest(quest, false) && _bot->CanAddQuest(quest, false))
+    {
+        _bot->AddQuest(quest, nullptr);
+        return;
+    }
+
+    // Tell the master, so a bot falling behind on a chain is not a mystery.
+    char const* reason = "I can't take it";
+    if (_bot->FindQuestSlot(0) >= MAX_QUEST_LOG_SIZE)
+        reason = "my quest log is full";
+    else if (!_bot->SatisfyQuestLevel(quest, false))
+        reason = "my level is too low";
+    else if (!_bot->SatisfyQuestPreviousQuest(quest, false))
+        reason = "I haven't done the quest before it";
+    else if (!_bot->CanAddQuest(quest, false))
+        reason = "no room in my bags for its item";
+    ReplyTo(master, "Can't take " + QuestLink(quest) + ": " + reason + ".");
+}
+
+// Room in the bags for what the quest hands out: the chosen item and the fixed rewards.
+bool PlayerbotAI::QuestRewardsFit(Quest const* quest, uint32 rewardItem) const
+{
+    auto fits = [this](uint32 item, uint32 count)
+    {
+        if (!item || !count)
+            return true;
+        ItemPosCountVec dest;
+        return _bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item, count) == EQUIP_ERR_OK;
+    };
+    if (quest->GetRewChoiceItemsCount() > 0 && !fits(rewardItem, quest->GetRewChoiceItemCount(rewardItem)))
+        return false;
+    for (uint32 i = 0; i < quest->GetRewItemsCount(); ++i)
+        if (!fits(quest->RewardItemId[i], quest->RewardItemIdCount[i]))
+            return false;
+    return true;
+}
+
+// As on AzerothCore: when the master turns a quest in, a bot that has it turns it in too,
+// done with its own objectives or not. Only a full bag (or a daily limit) stops it.
+void PlayerbotAI::MirrorQuestReward(Player* master, Quest const* quest, Object* questGiver)
+{
+    if (!master || !quest || !_bot)
+        return;
+
+    uint32 const questId = quest->GetQuestId();
+    QuestStatus const status = _bot->GetQuestStatus(questId);
+    if (status != QUEST_STATUS_INCOMPLETE && status != QUEST_STATUS_COMPLETE)
+        return;
+    if (_bot->GetQuestRewardStatus(questId))
+        return;
+
+    if (!_bot->SatisfyQuestDay(quest, false) || !_bot->SatisfyQuestWeek(quest, false)
+        || !_bot->SatisfyQuestMonth(quest, false) || !_bot->SatisfyQuestSeasonal(quest, false))
+    {
+        ReplyTo(master, "Can't turn in " + QuestLink(quest) + ": I've reached the limit for this quest.");
+        return;
+    }
+
+    uint32 const reward = BestRewardItem(quest);
+    if (!QuestRewardsFit(quest, reward))
+    {
+        ReplyTo(master, "Can't turn in " + QuestLink(quest) + ": no room in my bags for the reward.");
+        return;
+    }
+
+    // Its own objectives do not matter: mark it complete, then hand it in. A
+    // tracking-event quest rewards itself in CompleteQuest.
+    if (status != QUEST_STATUS_COMPLETE)
+    {
+        _bot->CompleteQuest(questId);
+        if (_bot->GetQuestRewardStatus(questId))
+            return;
+    }
+
+    // To the master's NPC or object when there is one; an item or an auto-complete
+    // turn-in has no place, so the bot itself stands in.
+    Object* giver = _bot;
+    if (questGiver && (questGiver->GetTypeId() == TypeID::TYPEID_UNIT
+        || questGiver->GetTypeId() == TypeID::TYPEID_GAMEOBJECT))
+        giver = questGiver;
+    _bot->RewardQuest(quest, reward, giver, true);
+}
+
+bool PlayerbotAI::HandleQuestListCommand(Player* from, std::string const& args)
+{
+    bool showIncomplete = false;
+    bool showComplete = false;
+    if (args == "all")
+        showIncomplete = showComplete = true;
+    else if (args == "completed" || args == "co")
+        showComplete = true;
+    else if (args == "incompleted" || args == "in")
+        showIncomplete = true;
+    else if (args != "summary")
+        return false;
+
+    // Every quest as a link; one in progress also gets its objectives, "3/8 Kobold Vermin".
+    auto questLine = [this](Quest const* quest, bool complete) -> std::string
+    {
+        std::ostringstream out;
+        out << QuestLink(quest);
+        if (complete)
+            return out.str();
+
+        std::string objectives;
+        for (QuestObjective const* objective : quest->m_questObjectives)
+        {
+            if (objective->Amount <= 0)
+                continue;
+            uint32 const amount = uint32(objective->Amount);
+            uint32 done = objective->Type == QUEST_OBJECTIVE_TYPE_ITEM
+                ? _bot->GetItemCount(objective->ObjectId)
+                : _bot->GetQuestObjectiveCounter(objective->Id);
+            done = std::min(done, amount);
+            std::string const piece = std::to_string(done) + "/" + std::to_string(amount) + " "
+                + QuestObjectiveLabel(objective);
+            // Whispers past ~255 characters are cut by the client.
+            if (out.str().size() + objectives.size() + piece.size() > 230)
+                break;
+            objectives += objectives.empty() ? " - " : ", ";
+            objectives += piece;
+        }
+        return out.str() + objectives;
+    };
+
+    uint32 incomplete = 0;
+    uint32 complete = 0;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        bool const completedPass = pass == 1;
+        bool const show = completedPass ? showComplete : showIncomplete;
+        if (show)
+            ReplyTo(from, completedPass ? "--- Completed quests ---" : "--- Incompleted quests ---");
+
+        for (uint16 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+        {
+            uint32 const questId = _bot->GetQuestSlotQuestId(slot);
+            Quest const* quest = questId ? sObjectMgr->GetQuestTemplate(questId) : nullptr;
+            if (!quest)
+                continue;
+            bool const isComplete = _bot->GetQuestStatus(questId) == QUEST_STATUS_COMPLETE;
+            if (isComplete != completedPass)
+                continue;
+
+            ++(isComplete ? complete : incomplete);
+            if (show)
+                ReplyTo(from, questLine(quest, isComplete));
+        }
+    }
+
+    ReplyTo(from, "--- Summary ---");
+    ReplyTo(from, "Total: " + std::to_string(incomplete + complete) + " / " + std::to_string(MAX_QUEST_LOG_SIZE)
+        + " (incompleted: " + std::to_string(incomplete) + ", completed: " + std::to_string(complete) + ")");
+    return true;
+}
+
 bool PlayerbotAI::HandleAutoGearCommand(Player* from, std::string const& args, bool acknowledge)
 {
     auto reply = [&](std::string const& msg)
@@ -5696,7 +5900,7 @@ bool PlayerbotAI::HandleQuestNpcs()
             QuestStatus const status = _bot->GetQuestStatus(mi.QuestId);
             if (status == QUEST_STATUS_COMPLETE && _bot->CanRewardQuest(quest, false))
             {
-                uint32 const reward = BestRewardIndex(quest);
+                uint32 const reward = BestRewardItem(quest);
                 if (_bot->CanRewardQuest(quest, reward, false))
                 {
                     _bot->RewardQuest(quest, reward, npc, true);
@@ -5724,13 +5928,16 @@ bool PlayerbotAI::HandleQuestNpcs()
     return false;
 }
 
-uint32 PlayerbotAI::BestRewardIndex(Quest const* quest) const
+uint32 PlayerbotAI::BestRewardItem(Quest const* quest) const
 {
     if (!_bot || !quest)
         return 0;
     uint32 const count = quest->GetRewChoiceItemsCount();
-    if (count <= 1 || !sPlayerbotMgr->GetQuestAutoPickReward())
+    if (count == 0)
         return 0;
+    // RewardQuest / CanRewardQuest take the chosen item's id, not its index.
+    if (count == 1 || !sPlayerbotMgr->GetQuestAutoPickReward())
+        return quest->RewardChoiceItemId[0];
 
     int bestIdx = 0;
     int bestScore = -1;
@@ -5756,7 +5963,7 @@ uint32 PlayerbotAI::BestRewardIndex(Quest const* quest) const
             bestIdx = int(i);
         }
     }
-    return uint32(bestIdx);
+    return quest->RewardChoiceItemId[bestIdx];
 }
 
 bool PlayerbotAI::SelectGossipOption(Creature* npc, uint32 gossipListId)
@@ -6712,7 +6919,7 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
 
     if (cmd == "help")
     {
-        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, eat/drink, maintenance, autogear [reset] [match|quality|ilvl], spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
+        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, quests all|completed|incompleted|summary, eat/drink, maintenance, autogear [reset] [match|quality|ilvl], spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
         return true;
     }
 
@@ -6870,6 +7077,10 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
             ack("Invalid gossip option.");
         return true;
     }
+
+    // "quests all" / "completed" / "incompleted" / "summary" list the quest log (AC ListQuestsAction).
+    if (cmd.rfind("quests ", 0) == 0 && HandleQuestListCommand(from, cmd.substr(7)))
+        return true;
 
     if (cmd == "quests" || cmd == "accept" || cmd == "turn in" || cmd == "turnin")
     {

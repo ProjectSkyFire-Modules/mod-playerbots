@@ -57,8 +57,10 @@ public:
     bool IsRandomBotsEnabled() const { return _randomBotsEnabled; }
     uint32 GetMaxRandomBots() const { return _maxRandomBots; }
 
-    // Logs the given character into the world as a manually-added bot.
-    bool AddBot(uint64 characterGuid, std::string* errorOut = nullptr);
+    // Starts logging the given character in as a manually-added bot, without
+    // blocking the world thread. notifyGuid gets "Bot 'X' logged in." (or the
+    // failure) once the character is loaded.
+    bool AddBot(uint64 characterGuid, std::string* errorOut = nullptr, uint64 notifyGuid = 0);
     // Logs the given bot character out of the world and frees its session.
     bool RemoveBot(uint64 characterGuid);
     bool IsBot(uint64 characterGuid) const { return _bots.find(characterGuid) != _bots.end(); }
@@ -210,6 +212,8 @@ private:
         uint32 botRealm = 0;
         uint32 startedMs = 0;
         bool discard = false;
+        // Player told when a ".playerbots add" login finishes (0 = nobody).
+        uint64 notifyGuid = 0;
     };
 
     // Shared bot spawn path. isRandom marks the bot as pool-managed.
@@ -217,9 +221,12 @@ private:
     // async character create, before the INSERT is visible to sync queries).
     bool SpawnBot(uint64 characterGuid, bool isRandom, std::string* errorOut,
         uint32 accountIdOverride = 0);
-    // Starts async login for the random pool (no world-thread DB spin-wait).
+    // Starts async login (no world-thread DB spin-wait); the bot enters the
+    // world a few ticks later in ProcessPendingLogins.
     bool BeginSpawnBot(uint64 characterGuid, bool isRandom, uint32 accountId,
-        std::string* errorOut);
+        std::string* errorOut, uint64 notifyGuid = 0);
+    // Tells pending.notifyGuid how a ".playerbots add" login ended.
+    void NotifyAddResult(PendingBotLogin const& pending, bool success);
     void ProcessPendingLogins();
     void FinishSpawnBot(PendingBotLogin& pending);
     void AbortPendingLogin(PendingBotLogin& pending);

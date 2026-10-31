@@ -1010,9 +1010,11 @@ void PlayerbotMgr::UpdateLfgAutoJoin(uint32 diff)
     }
 }
 
-bool PlayerbotMgr::AddBot(uint64 characterGuid, std::string* errorOut)
+bool PlayerbotMgr::AddBot(uint64 characterGuid, std::string* errorOut, uint64 notifyGuid)
 {
-    return SpawnBot(characterGuid, false, errorOut);
+    // Async like the random pool: the synchronous login spin-waited on the DB on
+    // the world thread and froze the server for seconds per bot.
+    return BeginSpawnBot(characterGuid, false, 0, errorOut, notifyGuid);
 }
 
 bool PlayerbotMgr::SpawnBot(uint64 characterGuid, bool isRandom, std::string* errorOut,
@@ -1101,7 +1103,7 @@ uint32 PlayerbotMgr::ResolveBotVirtualRealm()
 }
 
 bool PlayerbotMgr::BeginSpawnBot(uint64 characterGuid, bool isRandom, uint32 accountId,
-    std::string* errorOut)
+    std::string* errorOut, uint64 notifyGuid)
 {
     auto fail = [errorOut](char const* reason) -> bool
     {
@@ -1144,6 +1146,7 @@ bool PlayerbotMgr::BeginSpawnBot(uint64 characterGuid, bool isRandom, uint32 acc
     pending.isRandom = isRandom;
     pending.botRealm = botRealm;
     pending.startedMs = getMSTime();
+    pending.notifyGuid = notifyGuid;
     _pendingLogins.push_back(pending);
     _pendingLoginGuids.insert(characterGuid);
     return true;
@@ -1194,22 +1197,46 @@ void PlayerbotMgr::ProcessPendingLogins()
         if (status == WorldSession::BotLoginPollStatus::Success && !pending.discard)
         {
             FinishSpawnBot(pending);
-            if (_bots.find(pending.characterGuid) != _bots.end())
+            bool const online = _bots.find(pending.characterGuid) != _bots.end();
+            if (online)
             {
                 ++completed;
-                SF_LOG_INFO("modules", "[mod-playerbots] Random bot pool: %u/%u online (%u login pending).",
-                    uint32(_randomBots.size()), _maxRandomBots,
-                    uint32(_pendingLogins.size() > 0 ? _pendingLogins.size() - 1 : 0));
+                if (pending.isRandom)
+                    SF_LOG_INFO("modules", "[mod-playerbots] Random bot pool: %u/%u online (%u login pending).",
+                        uint32(_randomBots.size()), _maxRandomBots,
+                        uint32(_pendingLogins.size() > 0 ? _pendingLogins.size() - 1 : 0));
             }
+            NotifyAddResult(pending, online);
         }
         else
         {
+            NotifyAddResult(pending, false);
             AbortPendingLogin(pending);
         }
 
         _pendingLoginGuids.erase(pending.characterGuid);
         it = _pendingLogins.erase(it);
     }
+}
+
+void PlayerbotMgr::NotifyAddResult(PendingBotLogin const& pending, bool success)
+{
+    if (!pending.notifyGuid)
+        return;
+    Player* player = ObjectAccessor::FindPlayer(pending.notifyGuid);
+    WorldSession* session = player ? player->GetSession() : nullptr;
+    if (!session)
+        return;
+
+    std::string name;
+    if (!sObjectMgr->GetPlayerNameByGUID(pending.characterGuid, name))
+        name = "<unknown>";
+    // SquidBots Lite reads "Bot 'X' logged in." to invite the bot: keep the wording.
+    if (success)
+        ChatHandler(session).PSendSysMessage("Bot '%s' logged in.", name.c_str());
+    else
+        ChatHandler(session).PSendSysMessage("Could not add bot '%s': failed to load the character into the world.",
+            name.c_str());
 }
 
 void PlayerbotMgr::AbortPendingLogin(PendingBotLogin& pending)

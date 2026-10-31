@@ -27,6 +27,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+class Object;
 class Player;
 class Unit;
 class Creature;
@@ -83,6 +84,11 @@ public:
     void ResetStrategiesToRoleDefaults();
     // Re-check which gear set to wear on the next tick (after a re-gear).
     void ResetGearSet() { _gearSetPvp = -1; }
+    // The master accepted / turned in a quest: the bot does the same when it
+    // can, and whispers the master why when it cannot.
+    void MirrorQuestAccept(Player* master, Quest const* quest);
+    void MirrorQuestReward(Player* master, Quest const* quest, Object* questGiver);
+    bool QuestRewardsFit(Quest const* quest, uint32 rewardItem) const;
     // Skip a spell that just failed to cast so the rotation moves on to its next pick.
     void BackOffSpell(uint32 spellId);
     bool IsSpellBackedOff(uint32 spellId) const;
@@ -201,7 +207,8 @@ private:
     bool HandleAutoQuesting();
     bool TryGossipForVendorOrQuest(Creature* npc, bool wantVendor, bool wantQuest);
     bool SelectGossipOption(Creature* npc, uint32 gossipListId);
-    uint32 BestRewardIndex(Quest const* quest) const;
+    // The reward choice to take, as its item id (what RewardQuest expects), 0 when none.
+    uint32 BestRewardItem(Quest const* quest) const;
     bool TravelToVendorHub(bool preferRepair);
     bool TravelToQuestObjective();
     bool TravelToNearbyQuestgiver();
@@ -326,6 +333,9 @@ private:
     bool HandlePositionCommand(Player* from, std::string const& args, bool acknowledge);
     // AC `autogear [reset] [match|<quality>|<item level>]`.
     bool HandleAutoGearCommand(Player* from, std::string const& args, bool acknowledge);
+    // AC `quests all|completed|incompleted|summary`: whispers the quest log.
+    // False for any other argument (bare `quests` is accept / turn in).
+    bool HandleQuestListCommand(Player* from, std::string const& args);
 
     Creature* FindNearbyLoot();
     Creature* FindNearbyRepairer();

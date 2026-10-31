@@ -15,7 +15,7 @@ Whisper replies with a short ack. Party/raid orders apply silently (no spam).
 | --- | --- |
 | `.playerbots status` | Module on/off, random-bot counts, pending logins, login/init pacing. |
 | `.playerbots list` | Names/GUIDs of active (socket) bots. |
-| `.playerbots add <name>` | Log an offline character in as a full bot session. When you log out, every bot on **your own account** logs out with you (saved), so logging into one of those characters next loads where it really is. Random-pool bots and bots from other accounts stay online. |
+| `.playerbots add <name>` | Log an offline character in as a full bot session. The login runs in the background (no server freeze): the command answers `Logging in bot '<name>'...`, then `Bot '<name>' logged in.` once the character is loaded. The bot is not invited to your group. When you log out, every bot on **your own account** logs out with you (saved), so logging into one of those characters next loads where it really is. Random-pool bots and bots from other accounts stay online. |
 | `.playerbots remove <name>` | Log that bot out and free its session. |
 | `.playerbots summon` | Teleport all bots in your group to you. |
 | `.playerbots reload` | Reload `playerbots.conf` and the random-bot candidate pool. |
@@ -243,8 +243,12 @@ Send these as the message text (case-insensitive).
 | `mount prefer clear` | Clear preferred mounts for this bot. |
 | `gossip` / `gossip <n>` | List or select a gossip menu option on a nearby NPC. |
 | `quests` / `accept` / `turn in` | Accept/turn-in nearby (walks in), with reward-choice AI. With `nc +quests`, also travels to same-map objectives. |
+| `quests all` | Whisper the quest log (AC `ListQuestsAction`): in-progress quests as links with their objectives (`3/8 Kobold Vermin`), then completed ones, then `Total: n / 25 (incompleted: a, completed: b)`. |
+| `quests incompleted` / `quests in` | Only the quests in progress, then the total. |
+| `quests completed` / `quests co` | Only the quests ready to turn in, then the total. |
+| `quests summary` | Only the total. (AC's bare `quests` is this; here bare `quests` stays accept / turn in.) |
 
-Grouped bots on the `follow` pack (`-quests,-grind`) do **not** path to givers/objectives alone. When the master accepts a quest, eligible bots on the same map auto-add it to their quest log so they share progress while staying in formation. Auto turn-in while following is not enabled.
+Grouped bots on the `follow` pack (`-quests,-grind`) do **not** path to givers/objectives alone. When the master accepts a quest, eligible bots on the same map auto-add it to their quest log so they share progress while staying in formation. When the master turns a quest in, every bot on the same map that has the quest turns it in too, done with its own objectives or not, as on AzerothCore (reward picked like `quests`), so the next quest of a chain opens for them. Only a full bag, or a daily/weekly limit, stops it. A bot that cannot follow whispers why: `Can't take [quest]: my quest log is full / my level is too low / I haven't done the quest before it / no room in my bags for its item`, or `Can't turn in [quest]: no room in my bags for the reward / I've reached the limit for this quest`. Bots already done with a quest, or of another class or race, stay silent.
 
 Travel is cancelled by combat, `follow`, `stay`, `flee`, `summon`, or `reset`. Arrival resumes follow when `nc +follow` is on. Same-map only (no TravelNode / portals yet).
 
