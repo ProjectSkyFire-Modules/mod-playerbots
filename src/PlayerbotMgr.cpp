@@ -2811,7 +2811,8 @@ namespace
     {
         Item* worn = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
         uint32 const wornEntry = worn ? worn->GetEntry() : 0;
-        float const wornScore = worn ? GearScore(bot, worn->GetTemplate(), primaryStat, worn, slot) : -1.0f;
+        // A worn item raised by Destiny Weaver counts at its raised item level and stats.
+        float const wornScore = worn ? GearScore(bot, worn->GetStatTemplate(), primaryStat, worn, slot) : -1.0f;
 
         uint32 const passStats[2] = { primaryStat, 0 };
         int const passes = primaryStat && g_gearPool != GearPool::PvpOnly ? 2 : 1;

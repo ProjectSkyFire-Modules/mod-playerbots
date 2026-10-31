@@ -388,10 +388,11 @@ namespace
     }
 
     // Stat budget of an epic chest at the gear's item level (RandPropPoints): the
-    // yardstick an enchant is measured against. Heirlooms count at the bot's level.
+    // yardstick an enchant is measured against. Heirlooms count at the bot's level, items
+    // raised by Destiny Weaver at their raised item level (Item::GetStatTemplate).
     float GearBudget(Player* bot, Item* item)
     {
-        ItemTemplate const* proto = item->GetTemplate();
+        ItemTemplate const* proto = item->GetStatTemplate();
         uint32 itemLevel = proto->ItemLevel;
         if (proto->ScalingStatDistribution)
             itemLevel = std::max<uint32>(itemLevel, bot->getLevel());
@@ -423,7 +424,7 @@ namespace
         // Ring enchants and other profession perks.
         if (!HasSkill(bot, enchant->requiredSkill, enchant->requiredSkillValue))
             return false;
-        if (item->GetTemplate()->ItemLevel < c.spell->BaseLevel)
+        if (item->GetStatTemplate()->ItemLevel < c.spell->BaseLevel)
             return false;
         // An enchant worth more than the gear's own stat budget belongs to far better
         // gear, whatever level its source claims (test copies, recipes without a rank).
@@ -462,7 +463,7 @@ namespace
     {
         std::vector<GemCandidate> const& gems = GemCandidates();
         uint32 const level = bot->getLevel();
-        uint32 const itemLevel = item->GetTemplate()->ItemLevel;
+        uint32 const itemLevel = item->GetStatTemplate()->ItemLevel;
         bool const metaSocket = socket.color == SOCKET_COLOR_META;
         GemPick best;
         for (size_t i = 0; i < gems.size(); ++i)
@@ -862,7 +863,8 @@ namespace
         BotStatVector stats{};
         if (!item || !item->GetTemplate())
             return stats;
-        AddTemplateStats(stats, bot, item->GetTemplate());
+        // The stats the item really gives: raised items (Destiny Weaver) at their raised level.
+        AddTemplateStats(stats, bot, item->GetStatTemplate());
         AddRandomStats(stats, item->GetTemplate(), item);
         for (uint32 slot : { uint32(PERM_ENCHANTMENT_SLOT), uint32(SOCK_ENCHANTMENT_SLOT), uint32(SOCK_ENCHANTMENT_SLOT_2),
                              uint32(SOCK_ENCHANTMENT_SLOT_3), uint32(BONUS_ENCHANTMENT_SLOT), uint32(PRISMATIC_ENCHANTMENT_SLOT) })
