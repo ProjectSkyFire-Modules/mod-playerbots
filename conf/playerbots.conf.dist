@@ -230,6 +230,9 @@ Playerbots.AutoCreate.InitOnCreate = 0
 #                     later `.playerbots init` — pass `tele`/`teleport` on that
 #                     command when you want it again (levels 1–5 then go to
 #                     homebind / hearth).
+#                     Alt bots (characters not on an AccountPrefix account) are
+#                     never initialized or teleported automatically, only by an
+#                     explicit `.playerbots init`.
 #        Default:     1
 
 Playerbots.AutoCreate.TeleportOnInit = 1
@@ -398,6 +401,8 @@ Playerbots.WaitForAttack.Seconds = 5
 #    Playerbots.Vendor.SellGreens
 #        Description: Vendor-dump unbound uncommon+ items (soulbound/quest/gear
 #                     keepers are skipped). Grays always sell. Not a real AH post.
+#                     Alt bots (characters not on an AccountPrefix account) sell
+#                     only grays on their own; more only on a `sell all` order.
 #        Default:     1
 
 Playerbots.Vendor.SellGreens = 1

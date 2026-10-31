@@ -4821,6 +4821,9 @@ bool PlayerbotAI::ShouldVendorDumpItem(Item* item) const
         return false;
     if (proto->Quality == ITEM_QUALITY_POOR)
         return true;
+    // An alt's own items stay unless the player orders "sell all".
+    if (!_forceSellAll && sPlayerbotMgr->IsAltBot(_bot))
+        return false;
     if (!sPlayerbotMgr->GetVendorSellGreens() && !_forceSellAll)
         return false;
     if (proto->Quality < ITEM_QUALITY_NORMAL)
