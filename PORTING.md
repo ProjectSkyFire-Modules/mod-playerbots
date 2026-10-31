@@ -143,14 +143,17 @@ Remaining for later phases:
   * `pull` - tanks engage the issuer's target, or the configured RTI mark.
   * `rti` / `rti skull|cross|…` - set which raid icon bots focus (default skull).
   * `maintenance` - AC `MaintenanceAction` (`PlayerbotMgr::MaintainBot`):
-    spells, proficiencies, talents, glyphs, riding/mounts, hunter pets, repair;
-    keeps spec and gear. Alt bots honour `Playerbots.AltMaintenance.*`. Not
-    ported (no SkyFire equivalent yet): bags, food/reagents/potions,
-    enchants/gems, reputation, attunement quests, pet talents, keyring/ammo
-    (removed in MoP).
+    spells, proficiencies, talents, glyphs, riding/mounts, hunter pets, bags,
+    enchants and gems, repair; keeps spec and gear. Alt bots honour
+    `Playerbots.AltMaintenance.*`. Enchants/gems (`BotEnchants`) are chosen
+    from the game data with per-spec stat weights (`BotStatWeights`, Wowhead
+    MoP stat priorities, rank-based) instead of AC's fixed enchant tables.
+    Not ported (no SkyFire equivalent yet): food/reagents/potions,
+    reputation, attunement quests, pet talents, keyring/ammo (removed in MoP).
   * `autogear [reset] [match|<quality>|<ilvl>]` - AC `AutoGearAction`
     (`PlayerbotMgr::AutoGearBot`): incremental slot-by-slot upgrades scored by
-    item level, `reset` for a full re-roll, config caps
+    the spec's stat weights (`BotEnchants::GearValue`, AC also scores by stat
+    weights) or item level, `reset` for a full re-roll, config caps
     `Playerbots.AutoGear.*`. `autogear bis` is not ported (needs AC's BiS list
     tables).
   * Party filters: `@tank` / `@dps` / `@heal` / `@ranged` before an order.

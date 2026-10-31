@@ -315,6 +315,7 @@ private:
     bool _autoGearAltBots = true;
     int _autoGearQualityLimit = 4;    // epic, matches Gear.MaxQuality
     uint32 _autoGearItemLevelLimit = 0; // 0 = no limit
+    bool _autoGearStatWeights = true;
     bool _maintenanceCommand = true;
     bool _altMaintenanceSpells = true;
     bool _altMaintenanceTalents = true;
@@ -323,6 +324,10 @@ private:
     bool _altMaintenancePet = true;
     bool _altMaintenanceBags = true;
     uint32 _maintenanceBagEntry = 82446; // Royal Satchel, 28 slots
+    bool _maintenanceEnchants = true;
+    bool _maintenanceGems = true;
+    bool _altMaintenanceEnchants = true;
+    bool _altMaintenanceGems = true;
 
     // Rest / save-mana numeric thresholds only (enable/disable is co/nc runtime).
     float _restHealthPct = 50.0f;

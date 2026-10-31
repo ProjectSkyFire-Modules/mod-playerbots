@@ -7247,7 +7247,7 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
             return true;
         }
         sPlayerbotMgr->MaintainBot(_bot);
-        ack("Maintenance done: spells, talents, glyphs, mounts, bags and repairs refreshed.");
+        ack("Maintenance done: spells, talents, glyphs, mounts, bags, enchants, gems and repairs refreshed.");
         return true;
     }
 

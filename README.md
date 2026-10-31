@@ -42,8 +42,8 @@ client session:
   casts the class filler when you are in range with LoS.
 * `.playerbots init` refreshes gear and spec. On yourself: `.playerbots init`
   or `.playerbots init self`. Whisper a bot `autogear` to upgrade its gear for
-  its current spec, or `maintenance` to refresh spells/talents/glyphs/mounts
-  and repair (see [COMMANDS.md](COMMANDS.md)).
+  its current spec, or `maintenance` to refresh spells/talents/glyphs/mounts,
+  enchant and gem its gear and repair (see [COMMANDS.md](COMMANDS.md)).
 
 Toggle again or `.playerbots self off` to detach.
 
