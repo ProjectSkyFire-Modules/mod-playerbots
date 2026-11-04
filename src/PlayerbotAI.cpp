@@ -5,6 +5,7 @@
 
 #include "PlayerbotAI.h"
 #include "PlayerbotMgr.h"
+#include "BotEnchants.h"
 #include "BotGearSets.h"
 #include "BotPreferredMounts.h"
 #include "BotTeleportMaps.h"
@@ -29,6 +30,7 @@
 #include "GroupReference.h"
 #include "Item.h"
 #include "ItemPrototype.h"
+#include "ItemScalingHooks.h"
 #include "LFGMgr.h"
 #include "LootMgr.h"
 #include "Map.h"
@@ -670,6 +672,373 @@ bool PlayerbotAI::HandleGoCommand(Player* from, std::string const& args, bool ac
     return true;
 }
 
+namespace
+{
+    // Quality words autogear accepts (AC ChatHelper::parseItemQuality).
+    bool ParseGearQuality(std::string const& token, int& qualityOut)
+    {
+        if (token == "poor" || token == "grey" || token == "gray")
+            qualityOut = ITEM_QUALITY_POOR;
+        else if (token == "common" || token == "white" || token == "normal")
+            qualityOut = ITEM_QUALITY_NORMAL;
+        else if (token == "uncommon" || token == "green")
+            qualityOut = ITEM_QUALITY_UNCOMMON;
+        else if (token == "rare" || token == "blue")
+            qualityOut = ITEM_QUALITY_RARE;
+        else if (token == "epic" || token == "purple")
+            qualityOut = ITEM_QUALITY_EPIC;
+        else if (token == "legendary" || token == "orange")
+            qualityOut = ITEM_QUALITY_LEGENDARY;
+        else
+            return false;
+        return true;
+    }
+
+    char const* GearQualityName(int quality)
+    {
+        switch (quality)
+        {
+            case ITEM_QUALITY_POOR:      return "poor";
+            case ITEM_QUALITY_NORMAL:    return "common";
+            case ITEM_QUALITY_UNCOMMON:  return "uncommon";
+            case ITEM_QUALITY_RARE:      return "rare";
+            case ITEM_QUALITY_EPIC:      return "epic";
+            case ITEM_QUALITY_LEGENDARY: return "legendary";
+            default:                     return "custom";
+        }
+    }
+
+    // Average item level over the slots the player has filled, so empty
+    // slots do not drag `autogear match` down.
+    uint32 WornItemLevelAverage(Player* player)
+    {
+        uint32 sum = 0;
+        uint32 count = 0;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+                continue;
+            if (Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            {
+                sum += item->GetTemplate()->ItemLevel;
+                ++count;
+            }
+        }
+        return count ? sum / count : 0;
+    }
+}
+
+namespace
+{
+    std::string QuestLink(Quest const* quest)
+    {
+        std::ostringstream out;
+        out << "|cffffff00|Hquest:" << quest->GetQuestId() << ':' << quest->GetQuestLevel() << "|h["
+            << quest->GetTitle() << "]|h|r";
+        return out.str();
+    }
+
+    // An objective's name: its own text, else what it asks for.
+    std::string QuestObjectiveLabel(QuestObjective const* objective)
+    {
+        if (!objective->Description.empty())
+            return objective->Description;
+        switch (objective->Type)
+        {
+            case QUEST_OBJECTIVE_TYPE_NPC:
+            case QUEST_OBJECTIVE_TYPE_NPC_INTERACT:
+                if (CreatureTemplate const* creature = sObjectMgr->GetCreatureTemplate(objective->ObjectId))
+                    return creature->Name;
+                break;
+            case QUEST_OBJECTIVE_TYPE_ITEM:
+                if (ItemTemplate const* item = sObjectMgr->GetItemTemplate(objective->ObjectId))
+                    return item->Name1;
+                break;
+            case QUEST_OBJECTIVE_TYPE_GO:
+                if (GameObjectTemplate const* go = sObjectMgr->GetGameObjectTemplate(objective->ObjectId))
+                    return go->name;
+                break;
+            default:
+                break;
+        }
+        return "objective";
+    }
+}
+
+void PlayerbotAI::MirrorQuestAccept(Player* master, Quest const* quest)
+{
+    if (!master || !quest || !_bot)
+        return;
+
+    uint32 const questId = quest->GetQuestId();
+    // Already on it or done with it, or a quest of another class / race: nothing to say.
+    if (_bot->GetQuestStatus(questId) != QUEST_STATUS_NONE || _bot->GetQuestRewardStatus(questId)
+        || !_bot->SatisfyQuestClass(quest, false) || !_bot->SatisfyQuestRace(quest, false))
+        return;
+
+    if (_bot->CanTakeQuest(quest, false) && _bot->CanAddQuest(quest, false))
+    {
+        _bot->AddQuest(quest, nullptr);
+        return;
+    }
+
+    // Tell the master, so a bot falling behind on a chain is not a mystery.
+    char const* reason = "I can't take it";
+    if (_bot->FindQuestSlot(0) >= MAX_QUEST_LOG_SIZE)
+        reason = "my quest log is full";
+    else if (!_bot->SatisfyQuestLevel(quest, false))
+        reason = "my level is too low";
+    else if (!_bot->SatisfyQuestPreviousQuest(quest, false))
+        reason = "I haven't done the quest before it";
+    else if (!_bot->CanAddQuest(quest, false))
+        reason = "no room in my bags for its item";
+    ReplyTo(master, "Can't take " + QuestLink(quest) + ": " + reason + ".");
+}
+
+// Room in the bags for what the quest hands out: the chosen item and the fixed rewards.
+bool PlayerbotAI::QuestRewardsFit(Quest const* quest, uint32 rewardItem) const
+{
+    auto fits = [this](uint32 item, uint32 count)
+    {
+        if (!item || !count)
+            return true;
+        ItemPosCountVec dest;
+        return _bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item, count) == EQUIP_ERR_OK;
+    };
+    if (quest->GetRewChoiceItemsCount() > 0 && !fits(rewardItem, quest->GetRewChoiceItemCount(rewardItem)))
+        return false;
+    for (uint32 i = 0; i < quest->GetRewItemsCount(); ++i)
+        if (!fits(quest->RewardItemId[i], quest->RewardItemIdCount[i]))
+            return false;
+    return true;
+}
+
+// As on AzerothCore: when the master turns a quest in, a bot that has it turns it in too,
+// done with its own objectives or not. Only a full bag (or a daily limit) stops it.
+void PlayerbotAI::MirrorQuestReward(Player* master, Quest const* quest, Object* questGiver)
+{
+    if (!master || !quest || !_bot)
+        return;
+
+    uint32 const questId = quest->GetQuestId();
+    QuestStatus const status = _bot->GetQuestStatus(questId);
+    if (status != QUEST_STATUS_INCOMPLETE && status != QUEST_STATUS_COMPLETE)
+        return;
+    if (_bot->GetQuestRewardStatus(questId))
+        return;
+
+    if (!_bot->SatisfyQuestDay(quest, false) || !_bot->SatisfyQuestWeek(quest, false)
+        || !_bot->SatisfyQuestMonth(quest, false) || !_bot->SatisfyQuestSeasonal(quest, false))
+    {
+        ReplyTo(master, "Can't turn in " + QuestLink(quest) + ": I've reached the limit for this quest.");
+        return;
+    }
+
+    uint32 const reward = BestRewardItem(quest);
+    if (!QuestRewardsFit(quest, reward))
+    {
+        ReplyTo(master, "Can't turn in " + QuestLink(quest) + ": no room in my bags for the reward.");
+        return;
+    }
+
+    // Its own objectives do not matter: mark it complete, then hand it in. A
+    // tracking-event quest rewards itself in CompleteQuest.
+    if (status != QUEST_STATUS_COMPLETE)
+    {
+        _bot->CompleteQuest(questId);
+        if (_bot->GetQuestRewardStatus(questId))
+            return;
+    }
+
+    // To the master's NPC or object when there is one; an item or an auto-complete
+    // turn-in has no place, so the bot itself stands in.
+    Object* giver = _bot;
+    if (questGiver && (questGiver->GetTypeId() == TypeID::TYPEID_UNIT
+        || questGiver->GetTypeId() == TypeID::TYPEID_GAMEOBJECT))
+        giver = questGiver;
+    _bot->RewardQuest(quest, reward, giver, true);
+}
+
+bool PlayerbotAI::HandleQuestListCommand(Player* from, std::string const& args)
+{
+    bool showIncomplete = false;
+    bool showComplete = false;
+    if (args == "all")
+        showIncomplete = showComplete = true;
+    else if (args == "completed" || args == "co")
+        showComplete = true;
+    else if (args == "incompleted" || args == "in")
+        showIncomplete = true;
+    else if (args != "summary")
+        return false;
+
+    // Every quest as a link; one in progress also gets its objectives, "3/8 Kobold Vermin".
+    auto questLine = [this](Quest const* quest, bool complete) -> std::string
+    {
+        std::ostringstream out;
+        out << QuestLink(quest);
+        if (complete)
+            return out.str();
+
+        std::string objectives;
+        for (QuestObjective const* objective : quest->m_questObjectives)
+        {
+            if (objective->Amount <= 0)
+                continue;
+            uint32 const amount = uint32(objective->Amount);
+            uint32 done = objective->Type == QUEST_OBJECTIVE_TYPE_ITEM
+                ? _bot->GetItemCount(objective->ObjectId)
+                : _bot->GetQuestObjectiveCounter(objective->Id);
+            done = std::min(done, amount);
+            std::string const piece = std::to_string(done) + "/" + std::to_string(amount) + " "
+                + QuestObjectiveLabel(objective);
+            // Whispers past ~255 characters are cut by the client.
+            if (out.str().size() + objectives.size() + piece.size() > 230)
+                break;
+            objectives += objectives.empty() ? " - " : ", ";
+            objectives += piece;
+        }
+        return out.str() + objectives;
+    };
+
+    uint32 incomplete = 0;
+    uint32 complete = 0;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        bool const completedPass = pass == 1;
+        bool const show = completedPass ? showComplete : showIncomplete;
+        if (show)
+            ReplyTo(from, completedPass ? "--- Completed quests ---" : "--- Incompleted quests ---");
+
+        for (uint16 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+        {
+            uint32 const questId = _bot->GetQuestSlotQuestId(slot);
+            Quest const* quest = questId ? sObjectMgr->GetQuestTemplate(questId) : nullptr;
+            if (!quest)
+                continue;
+            bool const isComplete = _bot->GetQuestStatus(questId) == QUEST_STATUS_COMPLETE;
+            if (isComplete != completedPass)
+                continue;
+
+            ++(isComplete ? complete : incomplete);
+            if (show)
+                ReplyTo(from, questLine(quest, isComplete));
+        }
+    }
+
+    ReplyTo(from, "--- Summary ---");
+    ReplyTo(from, "Total: " + std::to_string(incomplete + complete) + " / " + std::to_string(MAX_QUEST_LOG_SIZE)
+        + " (incompleted: " + std::to_string(incomplete) + ", completed: " + std::to_string(complete) + ")");
+    return true;
+}
+
+bool PlayerbotAI::HandleAutoGearCommand(Player* from, std::string const& args, bool acknowledge)
+{
+    auto reply = [&](std::string const& msg)
+    {
+        if (acknowledge)
+            ReplyTo(from, msg);
+    };
+
+    if (!sPlayerbotMgr->IsAutoGearCommandEnabled())
+    {
+        reply("autogear command is not allowed, please check the configuration.");
+        return true;
+    }
+    if (!sPlayerbotMgr->IsAutoGearAltBotsEnabled() && sPlayerbotMgr->IsAltBot(_bot))
+    {
+        reply("You cannot use autogear on alt bots.");
+        return true;
+    }
+    if (_bot->IsInCombat())
+    {
+        reply("In combat — cannot change gear.");
+        return true;
+    }
+
+    int const qualityCap = sPlayerbotMgr->GetAutoGearQualityLimit();
+    uint32 const ilvlCap = sPlayerbotMgr->GetAutoGearItemLevelLimit(); // 0 = no limit
+    int quality = qualityCap;
+    uint32 ilvl = ilvlCap;
+
+    // `reset` wipes the worn gear and regears every slot; it combines with
+    // the other options: `autogear reset green`, `autogear reset 450`.
+    std::string param = args;
+    bool reset = false;
+    if (param == "reset" || param.rfind("reset ", 0) == 0)
+    {
+        reset = true;
+        param = param.size() > 6 ? param.substr(6) : std::string();
+    }
+
+    auto capItemLevel = [&](uint32 requested)
+    {
+        ilvl = ilvlCap ? std::min(requested, ilvlCap) : requested;
+        if (ilvlCap && requested > ilvlCap)
+            reply("Config caps item level at " + std::to_string(ilvlCap) + ", gearing to that instead of "
+                + std::to_string(requested) + ".");
+    };
+
+    int requestedQuality = 0;
+    if (param.empty())
+    {
+    }
+    else if (param == "bis")
+    {
+        reply("autogear bis is not ported yet; use autogear or autogear reset.");
+        return true;
+    }
+    else if (param == "match")
+    {
+        uint32 const requested = WornItemLevelAverage(from);
+        if (!requested)
+        {
+            reply("You have no gear equipped for me to match.");
+            return true;
+        }
+        capItemLevel(requested);
+    }
+    else if (ParseGearQuality(param, requestedQuality))
+    {
+        requestedQuality = std::max(requestedQuality, int(ITEM_QUALITY_NORMAL));
+        quality = std::min(requestedQuality, qualityCap);
+        if (requestedQuality > qualityCap)
+            reply(std::string("Config limits me to ") + GearQualityName(qualityCap) + " quality, gearing to that.");
+    }
+    else
+    {
+        // Rejects negative numbers, garbage and numbers too large for an item level.
+        bool const digitsOnly = param.size() <= 5 && param.find_first_not_of("0123456789") == std::string::npos;
+        uint32 const requested = digitsOnly ? uint32(std::stoul(param)) : 0;
+        if (!requested)
+        {
+            reply("Unknown autogear option '" + param + "'. Use reset, match, a quality "
+                "(white, green, blue, purple, orange) or a positive item level number.");
+            return true;
+        }
+        if (requested <= uint32(ITEM_QUALITY_LEGENDARY))
+        {
+            reply("'" + param + "' looks like a quality. Numbers are item levels (e.g. 450); use a colour word "
+                "for quality: white, green, blue, purple, orange.");
+            return true;
+        }
+        capItemLevel(requested);
+    }
+
+    uint32 const slots = sPlayerbotMgr->AutoGearBot(_bot, quality, ilvl, reset);
+
+    std::string summary = std::string(reset ? "Regeared from scratch (" : "Auto geared (")
+        + GearQualityName(quality) + (ilvl ? ", up to item level " + std::to_string(ilvl) : std::string()) + "): ";
+    if (reset)
+        summary += std::to_string(slots) + " slot(s) equipped.";
+    else if (slots)
+        summary += std::to_string(slots) + " slot(s) upgraded.";
+    else
+        summary += "no upgrades found.";
+    reply(summary);
+    return true;
+}
+
 bool PlayerbotAI::HandlePositionCommand(Player* from, std::string const& args, bool acknowledge)
 {
     if (!_bot)
@@ -961,6 +1330,18 @@ void PlayerbotAI::UpdateAI(uint32 diff)
         {
             BotGearSets::WearSet(_bot, wantPvp != 0);
             _gearSetPvp = wantPvp;
+        }
+
+        // Equip bag upgrades (AzerothCore's AutoEquipUpgradeLoot), once the PvE set is on.
+        if (_gearSetPvp == 0 && sPlayerbotMgr->ShouldAutoEquip(_bot))
+        {
+            _equipUpgradesTimer += BOT_AI_UPDATE_INTERVAL;
+            if (_equipUpgradesPending || _equipUpgradesTimer >= sPlayerbotMgr->GetAutoEquipInterval())
+            {
+                _equipUpgradesPending = false;
+                _equipUpgradesTimer = 0;
+                EquipBagUpgrades();
+            }
         }
     }
 
@@ -4288,6 +4669,282 @@ bool PlayerbotAI::HasNearbyLootPublic() const
     return const_cast<PlayerbotAI*>(this)->FindNearbyLoot() != nullptr;
 }
 
+namespace
+{
+    // Armor type the class wears for its armor specialization (cloth, leather, mail, plate);
+    // hunters, shamans, warriors and paladins move up a type at 40.
+    uint32 ClassArmorSubclass(Player* bot)
+    {
+        bool const forty = bot->getLevel() >= 40;
+        switch (bot->getClass())
+        {
+            case CLASS_WARRIOR:
+            case CLASS_PALADIN:      return forty ? ITEM_SUBCLASS_ARMOR_PLATE : ITEM_SUBCLASS_ARMOR_MAIL;
+            case CLASS_DEATH_KNIGHT: return ITEM_SUBCLASS_ARMOR_PLATE;
+            case CLASS_HUNTER:
+            case CLASS_SHAMAN:       return forty ? ITEM_SUBCLASS_ARMOR_MAIL : ITEM_SUBCLASS_ARMOR_LEATHER;
+            case CLASS_ROGUE:
+            case CLASS_DRUID:
+            case CLASS_MONK:         return ITEM_SUBCLASS_ARMOR_LEATHER;
+            default:                 return ITEM_SUBCLASS_ARMOR_CLOTH;
+        }
+    }
+
+    // Body armor of the class's own type only; cloaks, jewelry, shields and off-hands are
+    // left to CanUseItem and the stat weights.
+    bool WearsArmorType(Player* bot, ItemTemplate const* proto)
+    {
+        if (proto->Class != ITEM_CLASS_ARMOR || proto->InventoryType == INVTYPE_CLOAK)
+            return true;
+        switch (proto->SubClass)
+        {
+            case ITEM_SUBCLASS_ARMOR_CLOTH:
+            case ITEM_SUBCLASS_ARMOR_LEATHER:
+            case ITEM_SUBCLASS_ARMOR_MAIL:
+            case ITEM_SUBCLASS_ARMOR_PLATE:
+                return proto->SubClass == ClassArmorSubclass(bot);
+            default:
+                return true;
+        }
+    }
+
+    // Equipment slots an item of this type would go to (two for rings, trinkets and, for
+    // classes that dual-wield, one-hand weapons). Bows, guns and wands are main hand in MoP.
+    std::vector<uint8> RollSlots(Player* bot, ItemTemplate const* proto)
+    {
+        switch (proto->InventoryType)
+        {
+            case INVTYPE_HEAD:          return { EQUIPMENT_SLOT_HEAD };
+            case INVTYPE_NECK:          return { EQUIPMENT_SLOT_NECK };
+            case INVTYPE_SHOULDERS:     return { EQUIPMENT_SLOT_SHOULDERS };
+            case INVTYPE_CHEST:
+            case INVTYPE_ROBE:          return { EQUIPMENT_SLOT_CHEST };
+            case INVTYPE_WAIST:         return { EQUIPMENT_SLOT_WAIST };
+            case INVTYPE_LEGS:          return { EQUIPMENT_SLOT_LEGS };
+            case INVTYPE_FEET:          return { EQUIPMENT_SLOT_FEET };
+            case INVTYPE_WRISTS:        return { EQUIPMENT_SLOT_WRISTS };
+            case INVTYPE_HANDS:         return { EQUIPMENT_SLOT_HANDS };
+            case INVTYPE_FINGER:        return { EQUIPMENT_SLOT_FINGER1, EQUIPMENT_SLOT_FINGER2 };
+            case INVTYPE_TRINKET:       return { EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2 };
+            case INVTYPE_CLOAK:         return { EQUIPMENT_SLOT_BACK };
+            case INVTYPE_2HWEAPON:
+            case INVTYPE_WEAPONMAINHAND:
+            case INVTYPE_RANGED:
+            case INVTYPE_RANGEDRIGHT:
+            case INVTYPE_THROWN:        return { EQUIPMENT_SLOT_MAINHAND };
+            case INVTYPE_WEAPON:
+                if (bot->CanDualWield())
+                    return { EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND };
+                return { EQUIPMENT_SLOT_MAINHAND };
+            case INVTYPE_WEAPONOFFHAND:
+            case INVTYPE_SHIELD:
+            case INVTYPE_HOLDABLE:      return { EQUIPMENT_SLOT_OFFHAND };
+            default:                    return {};
+        }
+    }
+
+    // What the bot wears in a slot is worth, by its spec's weights (raised items at their
+    // raised level); 0 for an empty slot.
+    float WornValue(Player* bot, uint32 specId, uint8 slot, float capBoost)
+    {
+        Item* worn = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!worn || !worn->GetTemplate())
+            return 0.0f;
+        return BotEnchants::GearValue(bot, specId, worn->GetStatTemplate(), worn, slot, capBoost);
+    }
+}
+
+namespace
+{
+    // An item against what the bot wears where it would go: false when it is not gear the bot
+    // can use or wear (armor type), else the slot it would replace (the weaker of two ring,
+    // trinket or dual-wield slots; main hand + off hand for a two-hander), the worn value and
+    // the candidate's value, by the spec's stat weights. `valued` is the template the item is
+    // valued at (a raised version), `item` the bag copy if there is one.
+    bool CompareToWorn(Player* bot, ItemTemplate const* proto, ItemTemplate const* valued, Item* item,
+        uint8& slot, float& worn, float& candidate)
+    {
+        if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+            return false;
+        if (bot->CanUseItem(proto) != EQUIP_ERR_OK || !WearsArmorType(bot, proto))
+            return false;
+
+        std::vector<uint8> slots = RollSlots(bot, proto);
+        // A one-hander or off-hand next to a worn two-hander would only unequip it.
+        Item* mainHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+        if (mainHand && mainHand->GetTemplate()->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
+            slots.erase(std::remove(slots.begin(), slots.end(), uint8(EQUIPMENT_SLOT_OFFHAND)), slots.end());
+        if (slots.empty())
+            return false;
+
+        uint32 const specId = bot->GetTalentSpecialization(bot->GetActiveSpec());
+        float const capBoost = sPlayerbotMgr->GetLootCapBoost();
+
+        slot = slots.front();
+        worn = WornValue(bot, specId, slot, capBoost);
+        for (size_t i = 1; i < slots.size(); ++i)
+        {
+            float const value = WornValue(bot, specId, slots[i], capBoost);
+            if (value < worn)
+            {
+                worn = value;
+                slot = slots[i];
+            }
+        }
+        if (proto->InventoryType == INVTYPE_2HWEAPON && !bot->CanTitanGrip())
+            worn += WornValue(bot, specId, EQUIPMENT_SLOT_OFFHAND, capBoost);
+
+        // Another spec's piece is left to the players and bots it is for (Greed).
+        if (BotEnchants::HasWrongPrimary(bot, specId, valued, item))
+            return false;
+        candidate = BotEnchants::GearValue(bot, specId, valued, item, slot, capBoost);
+        return candidate > 0.0f;
+    }
+
+    bool BeatsWorn(float worn, float candidate)
+    {
+        return worn <= 0.0f || candidate >= worn * (1.0f + sPlayerbotMgr->GetLootNeedUpgrade());
+    }
+
+    // Moves the worn off hand into a free backpack or regular bag slot (never the PvP gear
+    // bag, which keeps one piece per equipment-slot position). False when there is no room.
+    bool StoreOffHand(Player* bot)
+    {
+        Item* offHand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        if (!offHand)
+            return true;
+        if (bot->CanUnequipItem(uint16(INVENTORY_SLOT_BAG_0) << 8 | EQUIPMENT_SLOT_OFFHAND, false) != EQUIP_ERR_OK)
+            return false;
+
+        Bag* const gearBag = BotGearSets::FindGearBag(bot);
+        auto tryStore = [&](uint8 bag, uint8 slot)
+        {
+            if (bot->GetItemByPos(bag, slot))
+                return false;
+            ItemPosCountVec dest;
+            if (bot->CanStoreItem(bag, slot, dest, offHand, false) != EQUIP_ERR_OK)
+                return false;
+            bot->RemoveItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+            bot->StoreItem(dest, offHand, true);
+            return true;
+        };
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (tryStore(INVENTORY_SLOT_BAG_0, slot))
+                return true;
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        {
+            Bag* container = bot->GetBagByPos(bag);
+            if (!container || container == gearBag)
+                continue;
+            for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                if (tryStore(bag, uint8(slot)))
+                    return true;
+        }
+        return false;
+    }
+}
+
+// Need = the item is gear the bot can use, of its own armor type, and beats what it wears
+// in that slot by at least Playerbots.Loot.NeedUpgradePercent by the spec's stat weights,
+// stats below a must-reach cap counting Playerbots.Loot.CapBoost times.
+bool PlayerbotAI::IsLootUpgrade(Player* bot, ItemTemplate const* proto)
+{
+    // With Destiny Weaver item scaling the bot would get the item raised to its level:
+    // roll on that version (ItemScalingHooks::LootPreview), not the base one.
+    ItemTemplate const* rolled = proto;
+    if (ItemScalingHooks::LootPreviewFn preview = ItemScalingHooks::LootPreview.load(std::memory_order_relaxed))
+        if (ItemTemplate const* raised = preview(bot, proto))
+            rolled = raised;
+
+    uint8 slot = 0;
+    float worn = 0.0f;
+    float candidate = 0.0f;
+    return CompareToWorn(bot, proto, rolled, nullptr, slot, worn, candidate) && BeatsWorn(worn, candidate);
+}
+
+// Equips every bag item that beats what the bot wears by the same rule as a Need roll (as
+// AzerothCore's "equip upgrades"), best gain first. The PvP gear bag is never searched.
+// The replaced piece goes where the new one was. Returns how many items were equipped.
+uint32 PlayerbotAI::EquipBagUpgrades(std::vector<std::string>* equipped)
+{
+    if (!_bot || !_bot->IsInWorld() || !_bot->IsAlive() || _bot->IsInCombat())
+        return 0;
+    // The PvP set is worn there; it is swapped back by WearSet afterwards.
+    if (_bot->GetMap()->IsBattlegroundOrArena())
+        return 0;
+
+    Bag* const gearBag = BotGearSets::FindGearBag(_bot);
+    std::unordered_set<uint64> skipped;
+    uint32 count = 0;
+
+    for (uint32 pass = 0; pass < 2 * EQUIPMENT_SLOT_END; ++pass)
+    {
+        Item* best = nullptr;
+        uint8 bestSlot = 0;
+        float bestGain = 0.0f;
+
+        auto consider = [&](Item* item)
+        {
+            if (!item || item->IsInTrade() || skipped.count(item->GetGUID()))
+                return;
+            ItemTemplate const* proto = item->GetTemplate();
+            if (!proto || proto->InventoryType == INVTYPE_NON_EQUIP)
+                return;
+
+            uint8 slot = 0;
+            float worn = 0.0f;
+            float candidate = 0.0f;
+            if (!CompareToWorn(_bot, proto, item->GetStatTemplate(), item, slot, worn, candidate)
+                || !BeatsWorn(worn, candidate))
+                return;
+
+            // An empty slot is the biggest gain of all.
+            float const gain = worn > 0.0f ? candidate / worn : 1000.0f + candidate;
+            if (gain > bestGain)
+            {
+                best = item;
+                bestSlot = slot;
+                bestGain = gain;
+            }
+        };
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            consider(_bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+        for (uint8 bag = INVENTORY_SLOT_BAG_START; bag < INVENTORY_SLOT_BAG_END; ++bag)
+        {
+            Bag* container = _bot->GetBagByPos(bag);
+            if (!container || container == gearBag)
+                continue;
+            for (uint32 slot = 0; slot < container->GetBagSize(); ++slot)
+                consider(container->GetItemByPos(uint8(slot)));
+        }
+        if (!best)
+            break;
+
+        uint16 dest = 0;
+        bool const twoHand = best->GetTemplate()->InventoryType == INVTYPE_2HWEAPON && !_bot->CanTitanGrip();
+        if (_bot->CanEquipItem(bestSlot, dest, best, true) != EQUIP_ERR_OK || (twoHand && !StoreOffHand(_bot)))
+        {
+            skipped.insert(best->GetGUID());
+            continue;
+        }
+
+        std::string const name = best->GetTemplate()->Name1;
+        _bot->SwapItem(best->GetPos(), uint16(INVENTORY_SLOT_BAG_0) << 8 | bestSlot);
+        if (_bot->GetItemByPos(INVENTORY_SLOT_BAG_0, bestSlot) != best)
+        {
+            skipped.insert(best->GetGUID());
+            continue;
+        }
+
+        ++count;
+        if (equipped)
+            equipped->push_back(name);
+        SF_LOG_DEBUG("modules", "[mod-playerbots] %s equipped upgrade %s", _bot->GetName().c_str(), name.c_str());
+    }
+    return count;
+}
+
 bool PlayerbotAI::HandleLootRolls()
 {
     if (!_bot || _bot->GetTypeId() != TypeID::TYPEID_PLAYER || !_bot->IsInWorld())
@@ -4307,17 +4964,11 @@ bool PlayerbotAI::HandleLootRolls()
         if (voteItr == roll->playerVote.end() || voteItr->second != RollType::MAX_ROLL_TYPE)
             continue;
 
+        // Need only on a genuine upgrade for the bot's spec; greed on everything else.
         RollType vote = RollType::ROLL_GREED;
         if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(roll->itemid))
-        {
-            // Simple heuristic: greed on most loot; need on usable weapons/armor
-            // the bot can equip (keeps LFG thresholds moving).
-            if (proto->Class == ITEM_CLASS_WEAPON || proto->Class == ITEM_CLASS_ARMOR)
-            {
-                if (_bot->CanUseItem(proto) == EQUIP_ERR_OK)
-                    vote = RollType::ROLL_NEED;
-            }
-        }
+            if (IsLootUpgrade(_bot, proto))
+                vote = RollType::ROLL_NEED;
 
         // Master loot / FFA rolls still expect a vote so the timer clears.
         LootMethod const method = group->GetLootMethod();
@@ -4658,6 +5309,9 @@ bool PlayerbotAI::ShouldVendorDumpItem(Item* item) const
         return false;
     if (proto->Quality == ITEM_QUALITY_POOR)
         return true;
+    // An alt's own items stay unless the player orders "sell all".
+    if (!_forceSellAll && sPlayerbotMgr->IsAltBot(_bot))
+        return false;
     if (!sPlayerbotMgr->GetVendorSellGreens() && !_forceSellAll)
         return false;
     if (proto->Quality < ITEM_QUALITY_NORMAL)
@@ -5530,7 +6184,7 @@ bool PlayerbotAI::HandleQuestNpcs()
             QuestStatus const status = _bot->GetQuestStatus(mi.QuestId);
             if (status == QUEST_STATUS_COMPLETE && _bot->CanRewardQuest(quest, false))
             {
-                uint32 const reward = BestRewardIndex(quest);
+                uint32 const reward = BestRewardItem(quest);
                 if (_bot->CanRewardQuest(quest, reward, false))
                 {
                     _bot->RewardQuest(quest, reward, npc, true);
@@ -5558,13 +6212,16 @@ bool PlayerbotAI::HandleQuestNpcs()
     return false;
 }
 
-uint32 PlayerbotAI::BestRewardIndex(Quest const* quest) const
+uint32 PlayerbotAI::BestRewardItem(Quest const* quest) const
 {
     if (!_bot || !quest)
         return 0;
     uint32 const count = quest->GetRewChoiceItemsCount();
-    if (count <= 1 || !sPlayerbotMgr->GetQuestAutoPickReward())
+    if (count == 0)
         return 0;
+    // RewardQuest / CanRewardQuest take the chosen item's id, not its index.
+    if (count == 1 || !sPlayerbotMgr->GetQuestAutoPickReward())
+        return quest->RewardChoiceItemId[0];
 
     int bestIdx = 0;
     int bestScore = -1;
@@ -5590,7 +6247,7 @@ uint32 PlayerbotAI::BestRewardIndex(Quest const* quest) const
             bestIdx = int(i);
         }
     }
-    return uint32(bestIdx);
+    return quest->RewardChoiceItemId[bestIdx];
 }
 
 bool PlayerbotAI::SelectGossipOption(Creature* npc, uint32 gossipListId)
@@ -6546,7 +7203,7 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
 
     if (cmd == "help")
     {
-        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, eat/drink, maintenance, spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
+        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, quests all|completed|incompleted|summary, eat/drink, maintenance, autogear [reset] [match|quality|ilvl], spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
         return true;
     }
 
@@ -6705,6 +7362,10 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
         return true;
     }
 
+    // "quests all" / "completed" / "incompleted" / "summary" list the quest log (AC ListQuestsAction).
+    if (cmd.rfind("quests ", 0) == 0 && HandleQuestListCommand(from, cmd.substr(7)))
+        return true;
+
     if (cmd == "quests" || cmd == "accept" || cmd == "turn in" || cmd == "turnin")
     {
         _forceQuest = true;
@@ -6862,10 +7523,40 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
         return true;
     }
 
-    if (cmd == "maintenance" || cmd == "autogear")
+    if (cmd == "maintenance")
     {
-        sPlayerbotMgr->InitializeBot(_bot);
-        ack(cmd == "autogear" ? "Autogear applied." : "Maintenance applied.");
+        if (!sPlayerbotMgr->IsMaintenanceCommandEnabled())
+        {
+            ack("maintenance command is not allowed, please check the configuration.");
+            return true;
+        }
+        sPlayerbotMgr->MaintainBot(_bot);
+        ack("Maintenance done: spells, talents, glyphs, mounts, bags, enchants, gems and repairs refreshed.");
+        return true;
+    }
+
+    if (cmd == "autogear" || cmd.rfind("autogear ", 0) == 0)
+        return HandleAutoGearCommand(from, cmd == "autogear" ? std::string() : cmd.substr(9), acknowledge);
+
+    // Ordered by the player, so alts do it too.
+    if (cmd == "equip upgrades" || cmd == "equip upgrade")
+    {
+        if (_bot->IsInCombat())
+        {
+            ack("In combat — cannot change gear.");
+            return true;
+        }
+        std::vector<std::string> equipped;
+        EquipBagUpgrades(&equipped);
+        if (equipped.empty())
+            ack("No upgrades in my bags.");
+        else
+        {
+            std::string text = "Equipped:";
+            for (size_t i = 0; i < equipped.size(); ++i)
+                text += (i ? ", " : " ") + equipped[i];
+            ack(text.c_str());
+        }
         return true;
     }
 

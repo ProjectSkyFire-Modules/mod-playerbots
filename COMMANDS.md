@@ -15,7 +15,7 @@ Whisper replies with a short ack. Party/raid orders apply silently (no spam).
 | --- | --- |
 | `.playerbots status` | Module on/off, random-bot counts, pending logins, login/init pacing. |
 | `.playerbots list` | Names/GUIDs of active (socket) bots. |
-| `.playerbots add <name>` | Log an offline character in as a full bot session. |
+| `.playerbots add <name>` | Log an offline character in as a full bot session. The login runs in the background (no server freeze): the command answers `Logging in bot '<name>'...`, then `Bot '<name>' logged in.` once the character is loaded. The bot is not invited to your group. When you log out, every bot on **your own account** logs out with you (saved), so logging into one of those characters next loads where it really is. Random-pool bots and bots from other accounts stay online. |
 | `.playerbots remove <name>` | Log that bot out and free its session. |
 | `.playerbots summon` | Teleport all bots in your group to you. |
 | `.playerbots reload` | Reload `playerbots.conf` and the random-bot candidate pool. |
@@ -219,8 +219,13 @@ Send these as the message text (case-insensitive).
 | `pull` | Tank-spec bots: reach your target (or RTI mark), cast a ranged opener / taunt, then fight. |
 | `rti` / `rti skull\|…` | Set which raid icon bots focus (default skull). Tanks auto-mark that icon on an unmarked pack mob in combat. |
 | `dps attack` | Damage-role bots attack your target. |
-| `maintenance` | Re-run init (spec + gear) on that bot. |
-| `autogear` | Same as `maintenance`. |
+| `maintenance` | Keep spec and gear; learn trainer/level spells and armor proficiencies, re-apply recommended talents and glyphs, riding + mounts, fill hunter Call Pet slots, put a bag (`Playerbots.Maintenance.BagEntry`, Royal Satchel by default) in every empty bag slot (one stays free for the PvP gear bag when the bot has none yet), enchant the equipped gear and fill empty sockets with the best enchants/gems for the spec (`Playerbots.Maintenance.Enchants`, `.Gems`; an enchant is only replaced by a better one, never on alts), repair. Alt bots skip parts disabled by `Playerbots.AltMaintenance.*`. Off with `Playerbots.Maintenance.Command = 0`. |
+| `autogear` | Upgrade worn PvE gear for the bot's current spec: a slot changes only for a better piece by the spec's stat weights (stats, sockets as the best gem, weapon DPS for physical specs, hit/expertise/spell hit caps and haste soft caps from the bot's own ratings; `Playerbots.AutoGear.StatWeights = 0` scores by item level instead), and the old piece goes to the bags (full bags keep it). Capped by `Playerbots.AutoGear.QualityLimit` / `ItemLevelLimit`. Not in combat. |
+| `autogear reset` | Destroy worn gear and regear every slot from scratch with the best weighted piece (re-rolls the PvP set too). Combines with the options below: `autogear reset green`, `autogear reset 450`, `autogear reset match`. |
+| `autogear <quality>` | Cap quality: `white`/`common`, `green`/`uncommon`, `blue`/`rare`, `purple`/`epic`, `orange`/`legendary` (never above the config limit). |
+| `autogear <ilvl>` | Cap item level, e.g. `autogear 450` (clamped to `ItemLevelLimit` when non-zero). Numbers 0–5 are rejected as qualities. |
+| `autogear match` | Cap item level at the issuer's average equipped item level (filled slots only). |
+| `equip upgrades` / `equip upgrade` | Equip every bag item that beats what the bot wears (same rule as a Need roll: usable, own armor type, 2% better by the spec's stat weights) and say what was equipped. Works on alts too. Random bots also do it on their own (`Playerbots.AutoEquip.*`). |
 | `debug` / `debug on` / `debug off` | Bot says combat actions in chat (`Combat: Casting Arcane Shot`). Also `co +debug`. |
 | `eat` / `drink` / `food` | Sit and use bag food/drink (or fallback regen) until nearly full. Self-bots: AI will not stand you up or interrupt clicked food/drink; regen continues past the start threshold. |
 | `heal` | Healer-only shortcut: strict heal mode (same as `co +heal`). |
@@ -233,14 +238,18 @@ Send these as the message text (case-insensitive).
 | `position` / `position ?` | List saved position names. |
 | `position go <name>` | Same as `go <name>`. |
 | `sell` / `sell junk` | Walk to a nearby vendor (or same-map vendor hub) and sell gray junk; also repairs if the NPC can. Idle bots do this opportunistically. |
-| `sell all` | Same path, but also vendor-dumps unbound greens+ (soulbound/quest/usable gear kept). |
+| `sell all` | Same path, but also vendor-dumps unbound greens+ (soulbound/quest/usable gear kept). Alt bots (your own characters) only ever sell more than grey junk on this order. |
 | `mount` / `dismount` | Force mount/dismount. Bots also **auto-mount when the master mounts**, matching ground vs flying vs swift flying, and dismount when the master does (or in combat). |
 | `mount prefer <spellId>` | Remember a preferred ground or flying mount spell for this bot (`playerbots_preferred_mounts`). |
 | `mount prefer clear` | Clear preferred mounts for this bot. |
 | `gossip` / `gossip <n>` | List or select a gossip menu option on a nearby NPC. |
 | `quests` / `accept` / `turn in` | Accept/turn-in nearby (walks in), with reward-choice AI. With `nc +quests`, also travels to same-map objectives. |
+| `quests all` | Whisper the quest log (AC `ListQuestsAction`): in-progress quests as links with their objectives (`3/8 Kobold Vermin`), then completed ones, then `Total: n / 25 (incompleted: a, completed: b)`. |
+| `quests incompleted` / `quests in` | Only the quests in progress, then the total. |
+| `quests completed` / `quests co` | Only the quests ready to turn in, then the total. |
+| `quests summary` | Only the total. (AC's bare `quests` is this; here bare `quests` stays accept / turn in.) |
 
-Grouped bots on the `follow` pack (`-quests,-grind`) do **not** path to givers/objectives alone. When the master accepts a quest, eligible bots on the same map auto-add it to their quest log so they share progress while staying in formation. Auto turn-in while following is not enabled.
+Grouped bots on the `follow` pack (`-quests,-grind`) do **not** path to givers/objectives alone. When the master accepts a quest, eligible bots on the same map auto-add it to their quest log so they share progress while staying in formation. When the master turns a quest in, every bot on the same map that has the quest turns it in too, done with its own objectives or not, as on AzerothCore (reward picked like `quests`), so the next quest of a chain opens for them. Only a full bag, or a daily/weekly limit, stops it. A bot that cannot follow whispers why: `Can't take [quest]: my quest log is full / my level is too low / I haven't done the quest before it / no room in my bags for its item`, or `Can't turn in [quest]: no room in my bags for the reward / I've reached the limit for this quest`. Bots already done with a quest, or of another class or race, stay silent.
 
 Travel is cancelled by combat, `follow`, `stay`, `flee`, `summon`, or `reset`. Arrival resumes follow when `nc +follow` is on. Same-map only (no TravelNode / portals yet).
 
@@ -336,7 +345,8 @@ Closest equivalents for older one-shot orders:
 | Stop assisting | `passive` or `co +passive` |
 | Resume assist | `aggressive` or `co -passive` |
 | Clear bot state | `reset` |
-| Re-gear / talents refresh | `autogear` / `maintenance` or `.playerbots init` |
+| Re-gear | `autogear` / `autogear reset` or `.playerbots init` |
+| Spells / talents refresh | `maintenance` or `.playerbots init` |
 | Eat / drink | `eat` / `drink` or `nc +food` |
 | Strict healer / healer DPS | `co +heal` / `co +healer dps` |
 | Conserve healer mana | `co +save mana` |

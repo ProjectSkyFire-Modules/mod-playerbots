@@ -142,7 +142,20 @@ Remaining for later phases:
     (from its active specialization).
   * `pull` - tanks engage the issuer's target, or the configured RTI mark.
   * `rti` / `rti skull|cross|…` - set which raid icon bots focus (default skull).
-  * `maintenance` / `autogear` - re-run `InitializeBot` (spec + gear).
+  * `maintenance` - AC `MaintenanceAction` (`PlayerbotMgr::MaintainBot`):
+    spells, proficiencies, talents, glyphs, riding/mounts, hunter pets, bags,
+    enchants and gems, repair; keeps spec and gear. Alt bots honour
+    `Playerbots.AltMaintenance.*`. Enchants/gems (`BotEnchants`) are chosen
+    from the game data with per-spec stat weights (`BotStatWeights`, Wowhead
+    MoP stat priorities, rank-based) instead of AC's fixed enchant tables.
+    Not ported (no SkyFire equivalent yet): food/reagents/potions,
+    reputation, attunement quests, pet talents, keyring/ammo (removed in MoP).
+  * `autogear [reset] [match|<quality>|<ilvl>]` - AC `AutoGearAction`
+    (`PlayerbotMgr::AutoGearBot`): incremental slot-by-slot upgrades scored by
+    the spec's stat weights (`BotEnchants::GearValue`, AC also scores by stat
+    weights) or item level, `reset` for a full re-roll, config caps
+    `Playerbots.AutoGear.*`. `autogear bis` is not ported (needs AC's BiS list
+    tables).
   * Party filters: `@tank` / `@dps` / `@heal` / `@ranged` before an order.
   * `help` - list orders (whisper reply). Whisper commands get a short ack;
     party/raid orders apply silently to avoid spam.
@@ -261,7 +274,13 @@ for future updates.
   to the tank's victim; `+threat` throttles vs tank threat and pauses melee as well
   as spells. Boss/trash scripting still thin — depends on deeper rotations.
 * [DONE] Loot rolls: bots auto Need/Greed/Pass on GROUP_LOOT / NEED_BEFORE_GREED
-  (LFG). Corpse loot peels briefly when OOC with `nc +loot`.
+  (LFG). Need only on a genuine upgrade (`PlayerbotAI::IsLootUpgrade`: usable, own
+  armor type, >= `Playerbots.Loot.NeedUpgradePercent` better by the spec's stat
+  weights with must-reach caps x `Playerbots.Loot.CapBoost`), Greed otherwise. Corpse loot peels briefly when OOC with `nc +loot`.
+* [DONE] Equip upgrades (AC `AutoEquipUpgradeLoot` / `equip upgrade`): bots equip bag items
+  that beat the worn piece by the Need rule, after loot, won rolls and quest rewards and every
+  `Playerbots.AutoEquip.Interval` s out of combat; never from the PvP gear bag, not in
+  battlegrounds/arenas. Alts only on `equip upgrades` unless `Playerbots.AutoEquip.Alts = 1`.
 * [TODO] LFR: bots fill raid finder queues (auto-accept the LFR prompt/roles).
 * [TODO] Random battlegrounds / rated battlegrounds and arenas.
 * [TODO] Open-world grinding population polish (TravelNode / full quest graph still

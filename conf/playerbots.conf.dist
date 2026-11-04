@@ -230,6 +230,9 @@ Playerbots.AutoCreate.InitOnCreate = 0
 #                     later `.playerbots init` — pass `tele`/`teleport` on that
 #                     command when you want it again (levels 1–5 then go to
 #                     homebind / hearth).
+#                     Alt bots (characters not on an AccountPrefix account) are
+#                     never initialized or teleported automatically, only by an
+#                     explicit `.playerbots init`.
 #        Default:     1
 
 Playerbots.AutoCreate.TeleportOnInit = 1
@@ -261,6 +264,193 @@ Playerbots.Init.PerTick = 5
 
 Playerbots.Gear.MinQuality = 2
 Playerbots.Gear.MaxQuality = 4
+
+########################################
+# autogear / maintenance chat commands
+########################################
+#
+#    Playerbots.AutoGear.Command
+#        Description: Allow the `autogear` whisper/party order. In-game syntax
+#                     (an argument can only request at or below the limits):
+#                       autogear          - upgrade worn gear slot by slot
+#                       autogear green    - cap quality (white/green/blue/
+#                                           purple/orange)
+#                       autogear 450      - cap item level
+#                       autogear match    - cap at the issuer's average ilvl
+#                       autogear reset    - wipe worn gear and regear from
+#                                           scratch (combines with the above)
+#        Default:     1
+#
+#    Playerbots.AutoGear.AltBots
+#        Description: Allow `autogear` on alt bots (characters that are neither
+#                     in the random pool nor on an AccountPrefix account).
+#        Default:     1
+#
+#    Playerbots.AutoGear.QualityLimit
+#        Description: Highest ITEM_QUALITY autogear may equip (1=normal,
+#                     2=uncommon, 3=rare, 4=epic, 5=legendary).
+#        Default:     4
+#
+#    Playerbots.AutoGear.ItemLevelLimit
+#        Description: Highest item level autogear may equip (0 = no limit).
+#                     Gear is still limited to items the bot's level can use.
+#        Default:     0
+#
+#    Playerbots.AutoGear.StatWeights
+#        Description: How autogear scores a piece. 1 = the spec's stat weights
+#                     (the same ones maintenance uses for enchants and gems):
+#                     weighted stats, random suffixes (as rolled on worn
+#                     gear, their average on candidates), each socket as the
+#                     best gem for it, and weapon DPS for physical specs.
+#                     Stat caps are approximated from the spec's priority
+#                     page: 7.5% hit / 7.5% expertise (15% for tanks), 15%
+#                     spell hit for casters (spirit counts for Balance,
+#                     Shadow, Elemental), Fury hit to 26.5%, Balance haste
+#                     soft cap 24.22%, healer haste breakpoints. Rating past
+#                     a hard cap is worth 0.2 of its weight, measured on the bot's own
+#                     ratings without the piece it would replace;
+#                     `autogear reset` then takes the best piece instead of a
+#                     random pick among the top ones. 0 = item level (half
+#                     for a piece with another spec's primary stat).
+#        Default:     1
+
+Playerbots.AutoGear.Command = 1
+Playerbots.AutoGear.AltBots = 1
+Playerbots.AutoGear.QualityLimit = 4
+Playerbots.AutoGear.ItemLevelLimit = 0
+Playerbots.AutoGear.StatWeights = 1
+
+#
+#    Playerbots.Maintenance.Command
+#        Description: Allow the `maintenance` whisper/party order: learn
+#                     spells and proficiencies, apply recommended talents and
+#                     glyphs, riding and mounts, hunter pets, a bag in every
+#                     empty bag slot, enchants and gems, repair. Spec and gear
+#                     are kept.
+#        Default:     1
+#
+#    Playerbots.Maintenance.Enchants
+#    Playerbots.Maintenance.Gems
+#        Description: `maintenance` enchants the equipped gear and fills its
+#                     empty sockets, picking the best enchant / gem for the
+#                     bot's spec from the game data (enchanting recipes,
+#                     scrolls, armor kits, leg armor, shoulder inscriptions,
+#                     belt buckles; gem items). Choices are scored with stat
+#                     weights from each spec's stat priority (Wowhead MoP
+#                     pre-raid list): the first stat weighs 1, each rank down
+#                     loses StatRankStep. Gems take the socket bonus into
+#                     account. Enchants needing a profession (ring enchants,
+#                     secret inscriptions, tinkers) and profession gems are
+#                     skipped; gems need an item level up to the gear's, and
+#                     items sold for reputation (inscriptions, some gems) need
+#                     the bot to have that reputation.
+#                     Gems and enchants respect the same stat caps as
+#                     autogear, and caps Wowhead says to reach first (hit,
+#                     expertise, spell hit, healer haste breakpoints) are
+#                     filled before any other stat: below them those stats
+#                     count ten times. No hit gems once hit capped. Balance's
+#                     haste soft cap is only a ceiling. An existing enchant
+#                     is replaced only by a better one; gems never replace
+#                     socketed ones.
+#        Default:     1
+#
+#    Playerbots.Maintenance.EnchantBudgetShare
+#        Description: Most an enchant may be worth, as a share of the gear's
+#                     stat budget (RandPropPoints of an epic chest at the
+#                     item's level), counted in primary-stat points (rating
+#                     and spirit half, stamina 2/3, procs at their uptime).
+#                     Keeps high-level or test enchants off low-level gear
+#                     even when their source data claims a low level. Lower
+#                     it if bots still get enchants too strong for their gear.
+#        Default:     1.0
+#
+#    Playerbots.Maintenance.StatRankStep
+#        Description: Weight lost per rank down a spec's stat priority
+#                     (0.05: 1, 0.95, 0.90, ...). Stats a spec does not list
+#                     weigh 0.
+#        Default:     0.05
+#
+#    Playerbots.Maintenance.BagEntry
+#        Description: Item entry of the bag `maintenance` puts in each empty
+#                     bag slot (bags already there are kept). 0 = no bags.
+#                     A bot without its PvP gear bag yet keeps one slot free
+#                     for it (`.playerbots init` / `autogear reset` add it).
+#                     Must be a general bag: a profession bag (enchanting,
+#                     herbs, ...) holds only its own kind of item.
+#        Default:     82446 - (Royal Satchel, 28 slots)
+#
+#    Playerbots.AltMaintenance.Spells
+#    Playerbots.AltMaintenance.Talents
+#    Playerbots.AltMaintenance.Glyphs
+#    Playerbots.AltMaintenance.Mounts
+#    Playerbots.AltMaintenance.Pet
+#    Playerbots.AltMaintenance.Bags
+#    Playerbots.AltMaintenance.Enchants
+#    Playerbots.AltMaintenance.Gems
+#        Description: Which parts of `maintenance` run on alt bots. Talents
+#                     replaces the alt's talent choices with the recommended
+#                     build. Alts only get enchants on items with none (their
+#                     own enchants are never replaced).
+#        Default:     1
+
+Playerbots.Maintenance.Command = 1
+Playerbots.AltMaintenance.Spells = 1
+Playerbots.AltMaintenance.Talents = 1
+Playerbots.AltMaintenance.Glyphs = 1
+Playerbots.AltMaintenance.Mounts = 1
+Playerbots.AltMaintenance.Pet = 1
+Playerbots.AltMaintenance.Bags = 1
+Playerbots.AltMaintenance.Enchants = 1
+Playerbots.AltMaintenance.Gems = 1
+Playerbots.Maintenance.BagEntry = 82446
+Playerbots.Maintenance.Enchants = 1
+Playerbots.Maintenance.Gems = 1
+Playerbots.Maintenance.StatRankStep = 0.05
+Playerbots.Maintenance.EnchantBudgetShare = 1.0
+
+#
+#    Playerbots.Loot.NeedUpgradePercent
+#        Description: Group loot rolls: a bot rolls Need only on weapons and armor it can
+#                     use, of its class's own armor type (cloth/leather/mail/plate, mail
+#                     and plate from level 40), that beat what it wears in that slot by at
+#                     least this much by its spec's stat weights (the weaker of two ring,
+#                     trinket or dual-wield slots; main hand + off hand for a two-hander).
+#                     Greed on everything else.
+#        Default:     2 (percent)
+#
+#    Playerbots.Loot.CapBoost
+#        Description: In loot rolls, stats below a cap the bot must reach (hit,
+#                     expertise, spell hit, healer haste breakpoints) count this many times
+#                     their weight, so a capped stat matters without making a caster need
+#                     a tank item for its hit. Maintenance uses 10 for gems and enchants.
+#        Default:     1.15
+
+Playerbots.Loot.NeedUpgradePercent = 2
+Playerbots.Loot.CapBoost = 1.15
+
+#
+#    Playerbots.AutoEquip.Enable
+#        Description: Bots equip items from their bags that are upgrades, by the same rule
+#                     as a Need roll (Playerbots.Loot.NeedUpgradePercent and .CapBoost):
+#                     right after looting, winning a roll or a quest reward, and every
+#                     Playerbots.AutoEquip.Interval seconds out of combat (trades, mail,
+#                     purchases). Not in battlegrounds or arenas (the PvP set is worn
+#                     there); the PvP gear bag is never searched. The replaced piece goes
+#                     to the bag slot the new one came from.
+#        Default:     1
+#
+#    Playerbots.AutoEquip.Alts
+#        Description: Also on alt bots (characters of real players). Off by default: alts
+#                     change only when their player orders it ("equip upgrades").
+#        Default:     0
+#
+#    Playerbots.AutoEquip.Interval
+#        Description: Seconds between bag checks out of combat (minimum 5).
+#        Default:     60
+
+Playerbots.AutoEquip.Enable = 1
+Playerbots.AutoEquip.Alts = 0
+Playerbots.AutoEquip.Interval = 60
 
 #
 #    Playerbots.Rest.HealthPct
@@ -325,6 +515,8 @@ Playerbots.WaitForAttack.Seconds = 5
 #    Playerbots.Vendor.SellGreens
 #        Description: Vendor-dump unbound uncommon+ items (soulbound/quest/gear
 #                     keepers are skipped). Grays always sell. Not a real AH post.
+#                     Alt bots (characters not on an AccountPrefix account) sell
+#                     only grays on their own; more only on a `sell all` order.
 #        Default:     1
 
 Playerbots.Vendor.SellGreens = 1

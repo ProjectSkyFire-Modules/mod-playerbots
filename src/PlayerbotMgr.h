@@ -40,6 +40,9 @@ public:
     void UpdateBotAI(Player* bot, uint32 diff);
     // Player object is going away — drop self-bot / AI so a relog cannot tick
     // a dangling _bot (GetUInt64Value on a destroyed Object with valuesCount 0).
+    // A real player's logout also queues their own account's alt bots for
+    // logout (saved): logging into one of them later must load where it really
+    // is, not its last autosave, and never run the character twice.
     void OnPlayerLogout(Player* player);
 
     // Real player tick: align in-range socket bots to this player's MoP phases
@@ -54,8 +57,10 @@ public:
     bool IsRandomBotsEnabled() const { return _randomBotsEnabled; }
     uint32 GetMaxRandomBots() const { return _maxRandomBots; }
 
-    // Logs the given character into the world as a manually-added bot.
-    bool AddBot(uint64 characterGuid, std::string* errorOut = nullptr);
+    // Starts logging the given character in as a manually-added bot, without
+    // blocking the world thread. notifyGuid gets "Bot 'X' logged in." (or the
+    // failure) once the character is loaded.
+    bool AddBot(uint64 characterGuid, std::string* errorOut = nullptr, uint64 notifyGuid = 0);
     // Logs the given bot character out of the world and frees its session.
     bool RemoveBot(uint64 characterGuid);
     bool IsBot(uint64 characterGuid) const { return _bots.find(characterGuid) != _bots.end(); }
@@ -143,6 +148,37 @@ public:
         uint32 specOverride = 0, int maxItemQuality = -1, bool relevel = false,
         bool teleport = false, uint64 notifyPlayerGuid = 0);
     uint32 GetInitQueueSize() const { return uint32(_initQueue.size()); }
+
+    // AC `autogear`: re-gears for the bot's current spec, leaving spells and
+    // talents alone. reset=false upgrades the worn PvE set slot by slot (a slot
+    // changes only for a higher item level; the old piece goes to the bags);
+    // reset=true wipes and re-rolls both sets like init. maxItemQuality is an
+    // ITEM_QUALITY_* cap, maxItemLevel 0 = none. Returns the slots upgraded
+    // (reset: slots equipped).
+    uint32 AutoGearBot(Player* bot, int maxItemQuality, uint32 maxItemLevel, bool reset);
+    // AC `maintenance`: refreshes spells, proficiencies, talents, glyphs,
+    // riding/mounts and hunter pets, then repairs. Keeps spec and gear.
+    // Alt bots skip the parts their Playerbots.AltMaintenance.* key disables.
+    void MaintainBot(Player* bot);
+    // Not a random-pool bot and not on a bot (AccountPrefix) account: a real
+    // player's character. Nothing changes an alt (init, gear, spec, teleport)
+    // unless the player orders it.
+    bool IsAltBot(Player* bot) const;
+    // Account name starts with Playerbots.RandomBots.AccountPrefix (cached).
+    bool IsBotAccount(uint32 accountId) const;
+
+    bool IsAutoGearCommandEnabled() const { return _autoGearCommand; }
+    bool IsAutoGearAltBotsEnabled() const { return _autoGearAltBots; }
+    // Loot rolls: Need when an item beats the worn one by this share (0.02 = 2%), with stats
+    // below a must-reach cap counted _lootCapBoost times.
+    float GetLootNeedUpgrade() const { return _lootNeedUpgrade; }
+    float GetLootCapBoost() const { return _lootCapBoost; }
+    // Automatic equipping of bag upgrades: on for random bots, alts only with .Alts.
+    bool ShouldAutoEquip(Player* bot) const;
+    uint32 GetAutoEquipInterval() const { return _autoEquipInterval; }
+    int GetAutoGearQualityLimit() const { return _autoGearQualityLimit; }
+    uint32 GetAutoGearItemLevelLimit() const { return _autoGearItemLevelLimit; }
+    bool IsMaintenanceCommandEnabled() const { return _maintenanceCommand; }
     uint32 GetInitPerTick() const { return _initPerTick; }
 
     // Configured AutoCreate level band (also used by init +relevel).
@@ -183,6 +219,8 @@ private:
         uint32 botRealm = 0;
         uint32 startedMs = 0;
         bool discard = false;
+        // Player told when a ".playerbots add" login finishes (0 = nobody).
+        uint64 notifyGuid = 0;
     };
 
     // Shared bot spawn path. isRandom marks the bot as pool-managed.
@@ -190,9 +228,12 @@ private:
     // async character create, before the INSERT is visible to sync queries).
     bool SpawnBot(uint64 characterGuid, bool isRandom, std::string* errorOut,
         uint32 accountIdOverride = 0);
-    // Starts async login for the random pool (no world-thread DB spin-wait).
+    // Starts async login (no world-thread DB spin-wait); the bot enters the
+    // world a few ticks later in ProcessPendingLogins.
     bool BeginSpawnBot(uint64 characterGuid, bool isRandom, uint32 accountId,
-        std::string* errorOut);
+        std::string* errorOut, uint64 notifyGuid = 0);
+    // Tells pending.notifyGuid how a ".playerbots add" login ended.
+    void NotifyAddResult(PendingBotLogin const& pending, bool success);
     void ProcessPendingLogins();
     void FinishSpawnBot(PendingBotLogin& pending);
     void AbortPendingLogin(PendingBotLogin& pending);
@@ -231,6 +272,12 @@ private:
     bool _randomBotsEnabled = false;
     uint32 _maxRandomBots = 0;
     std::string _accountPrefix = "RNDBOT";
+    mutable std::unordered_map<uint32, bool> _botAccountCache;
+    // Bots already auto-inited this session: a low-level bot can still wear only
+    // whites after its init, and the ungeared sweep must not re-init it every 5 s.
+    std::unordered_set<uint64> _autoInited;
+    // Alt bots whose owner logged out, logged out (and saved) on the next tick.
+    std::vector<uint64> _pendingAltLogouts;
     // Delay between *starting* a new async login (not gear init).
     uint32 _loginIntervalMs = 250;
     // Cap in-flight login query holders for the random pool.
@@ -269,6 +316,30 @@ private:
     // Gear quality band for InitializeBot / create auto-init (ITEM_QUALITY_*).
     int _gearMinQuality = 2; // uncommon
     int _gearMaxQuality = 4; // epic
+
+    // `autogear` / `maintenance` chat commands (AC AutoGear* / *Maintenance*).
+    bool _autoGearCommand = true;
+    bool _autoGearAltBots = true;
+    int _autoGearQualityLimit = 4;    // epic, matches Gear.MaxQuality
+    uint32 _autoGearItemLevelLimit = 0; // 0 = no limit
+    bool _autoGearStatWeights = true;
+    bool _maintenanceCommand = true;
+    bool _altMaintenanceSpells = true;
+    bool _altMaintenanceTalents = true;
+    bool _altMaintenanceGlyphs = true;
+    bool _altMaintenanceMounts = true;
+    bool _altMaintenancePet = true;
+    bool _altMaintenanceBags = true;
+    uint32 _maintenanceBagEntry = 82446; // Royal Satchel, 28 slots
+    float _lootNeedUpgrade = 0.02f;
+    float _lootCapBoost = 1.15f;
+    bool _autoEquip = true;
+    bool _autoEquipAlts = false;
+    uint32 _autoEquipInterval = 60000;
+    bool _maintenanceEnchants = true;
+    bool _maintenanceGems = true;
+    bool _altMaintenanceEnchants = true;
+    bool _altMaintenanceGems = true;
 
     // Rest / save-mana numeric thresholds only (enable/disable is co/nc runtime).
     float _restHealthPct = 50.0f;

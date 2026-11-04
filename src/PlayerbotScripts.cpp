@@ -105,15 +105,59 @@ public:
             Player* member = itr->GetSource();
             if (!member || member == player || !member->IsInWorld())
                 continue;
-            if (!sPlayerbotMgr->HasBotAI(member->GetGUID()))
+            if (member->GetMapId() != player->GetMapId())
+                continue;
+            if (PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(member))
+                ai->MirrorQuestAccept(player, quest);
+        }
+    }
+
+    // A bot that loots an item, wins a roll or gets a quest reward checks its bags for
+    // upgrades on its next AI tick (after Destiny Weaver raised the item).
+    void OnLootItem(Player* player, Item* /*item*/, uint32 /*count*/) override
+    {
+        QueueEquipUpgrades(player);
+    }
+
+    void OnQuestRewardItem(Player* player, Item* /*item*/, Quest const* /*quest*/) override
+    {
+        QueueEquipUpgrades(player);
+    }
+
+    // When a real player (or self-bot) turns a quest in, grouped bots on the same
+    // map that have it complete turn it in too, so the next quest of a chain is
+    // open to them and their log does not fill up with finished quests.
+    void OnQuestReward(Player* player, Quest const* quest, Object* questGiver) override
+    {
+        if (!sPlayerbotMgr->IsEnabled() || !player || !quest)
+            return;
+        // A bot's own RewardQuest echoes this hook: skip to avoid loops.
+        if (!player->GetSession() || player->GetSession()->IsBot())
+            return;
+
+        Group* group = player->GetGroup();
+        if (!group)
+            return;
+
+        for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+        {
+            Player* member = itr->GetSource();
+            if (!member || member == player || !member->IsInWorld())
                 continue;
             if (member->GetMapId() != player->GetMapId())
                 continue;
-            if (!member->CanTakeQuest(quest, false) || !member->CanAddQuest(quest, false))
-                continue;
-
-            member->AddQuest(quest, nullptr);
+            if (PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(member))
+                ai->MirrorQuestReward(player, quest, questGiver);
         }
+    }
+
+private:
+    static void QueueEquipUpgrades(Player* player)
+    {
+        if (!sPlayerbotMgr->IsEnabled() || !player)
+            return;
+        if (PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(player))
+            ai->QueueEquipUpgrades();
     }
 };
 
@@ -257,15 +301,18 @@ public:
             return false;
         }
 
+        // The login runs in the background; "Bot 'X' logged in." follows once the
+        // character is loaded (the console gets nothing more).
         std::string error;
-        if (!sPlayerbotMgr->AddBot(guid, &error))
+        Player* issuer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!sPlayerbotMgr->AddBot(guid, &error, issuer ? issuer->GetGUID() : 0))
         {
             handler->PSendSysMessage("Could not add bot '%s': %s", name.c_str(), error.c_str());
             handler->SetSentErrorMessage(true);
             return false;
         }
 
-        handler->PSendSysMessage("Bot '%s' logged in.", name.c_str());
+        handler->PSendSysMessage("Logging in bot '%s'...", name.c_str());
         return true;
     }
 

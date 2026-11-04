@@ -27,12 +27,14 @@
 #include <unordered_map>
 #include <unordered_set>
 
+class Object;
 class Player;
 class Unit;
 class Creature;
 class BotAiEngine;
 class SpellInfo;
 class Item;
+struct ItemTemplate;
 class Quest;
 struct MountCapabilityEntry;
 
@@ -83,6 +85,11 @@ public:
     void ResetStrategiesToRoleDefaults();
     // Re-check which gear set to wear on the next tick (after a re-gear).
     void ResetGearSet() { _gearSetPvp = -1; }
+    // The master accepted / turned in a quest: the bot does the same when it
+    // can, and whispers the master why when it cannot.
+    void MirrorQuestAccept(Player* master, Quest const* quest);
+    void MirrorQuestReward(Player* master, Quest const* quest, Object* questGiver);
+    bool QuestRewardsFit(Quest const* quest, uint32 rewardItem) const;
     // Skip a spell that just failed to cast so the rotation moves on to its next pick.
     void BackOffSpell(uint32 spellId);
     bool IsSpellBackedOff(uint32 spellId) const;
@@ -161,6 +168,11 @@ public:
     BotTargetValues& GetTargetValues() { return _targets; }
     BotTargetValues const& GetTargetValues() const { return _targets; }
 
+    // Equips bag items that beat the worn ones (the Need rule); names of what was equipped.
+    uint32 EquipBagUpgrades(std::vector<std::string>* equipped = nullptr);
+    // A new item reached the bags (loot, roll won, quest reward): check for upgrades soon.
+    void QueueEquipUpgrades() { _equipUpgradesPending = true; }
+
 private:
     // Coarse combat role used by filters and strategy gating.
     enum class CombatRole { Tank, Healer, Damage };
@@ -201,7 +213,8 @@ private:
     bool HandleAutoQuesting();
     bool TryGossipForVendorOrQuest(Creature* npc, bool wantVendor, bool wantQuest);
     bool SelectGossipOption(Creature* npc, uint32 gossipListId);
-    uint32 BestRewardIndex(Quest const* quest) const;
+    // The reward choice to take, as its item id (what RewardQuest expects), 0 when none.
+    uint32 BestRewardItem(Quest const* quest) const;
     bool TravelToVendorHub(bool preferRepair);
     bool TravelToQuestObjective();
     bool TravelToNearbyQuestgiver();
@@ -246,6 +259,7 @@ private:
     // False while the master is moving or far ahead (keep following; no convoy stutter).
     bool IsMasterWaitingForRest() const;
     bool HandleLootRolls();
+    static bool IsLootUpgrade(Player* bot, ItemTemplate const* proto);
 
     // AC-style co / nc strategy engine (role-gated).
     bool HandleStrategyCommand(Player* from, std::string const& cmd, bool acknowledge);
@@ -324,6 +338,11 @@ private:
     bool BeginTravelTo(float x, float y, float z, Player* from, bool acknowledge);
     bool HandleGoCommand(Player* from, std::string const& args, bool acknowledge);
     bool HandlePositionCommand(Player* from, std::string const& args, bool acknowledge);
+    // AC `autogear [reset] [match|<quality>|<item level>]`.
+    bool HandleAutoGearCommand(Player* from, std::string const& args, bool acknowledge);
+    // AC `quests all|completed|incompleted|summary`: whispers the quest log.
+    // False for any other argument (bare `quests` is accept / turn in).
+    bool HandleQuestListCommand(Player* from, std::string const& args);
 
     Creature* FindNearbyLoot();
     Creature* FindNearbyRepairer();
@@ -352,6 +371,9 @@ private:
     uint32 _strandedCheckTimer = 0;
     // Gear set fully swapped in: 1 PvP, 0 PvE, -1 not settled yet.
     int8 _gearSetPvp = -1;
+    // Automatic bag upgrades: requested by a new item, else every Playerbots.AutoEquip.Interval.
+    bool _equipUpgradesPending = true;
+    uint32 _equipUpgradesTimer = 0;
     // spellId -> getMSTime() until which the rotation skips it.
     std::unordered_map<uint32, uint32> _spellBackoff;
     // spellId -> (target GUID, getMSTime() of the cast).
