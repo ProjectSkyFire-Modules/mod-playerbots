@@ -77,6 +77,9 @@ namespace BotRotation
 
     // Helpers used by per-spec lists.
     uint32 CountNearbyEnemies(Player* bot, float range);
+    // Hostiles around `around` that `bot` can attack. 0 when there are none
+    // (unlike CountNearbyEnemies, which reports 1 when the search is empty).
+    uint32 CountEnemiesNear(Player* bot, Unit* around, float range);
     // Major (multi-minute) cooldowns: +boost and a target worth it (boss, elite,
     // player) or a pack of 3+, so open-world trash doesn't eat them.
     bool WantsCooldowns(Context const& ctx);

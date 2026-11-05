@@ -64,7 +64,7 @@ Frost (DPS)
 
     Buff: Frost Armor
 
-    Rotation: Living Bomb or Nether Tempest (keep active) > Frozen Orb (on cooldown) > Ice Lance (on Fingers of Frost proc) > Frostfire Bolt (on Brain Freeze proc) > Frostbolt (filler)
+    Rotation: armor (Frost, else Molten until Frost Armor is learned) > Water Elemental > Living Bomb or Nether Tempest (keep active) > Frozen Orb (on cooldown) > Ice Lance (on Fingers of Frost) > Frostfire Bolt (on Brain Freeze; the passive is level 77) > Blizzard, or Flamestrike when Blizzard is not known yet > Cone of Cold and Frost Nova when a mob is in melee > Fire Blast (on cooldown, in range) > Frostbolt (filler)
 
 Monk
 

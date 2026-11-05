@@ -128,6 +128,7 @@ namespace
             case 13877:  // Blade Flurry
             case 12472:  // Icy Veins
             case 31687:  // Summon Water Elemental
+            case 122:    // Frost Nova (centered on the caster)
             case 103958: // Metamorphosis
             case 49016:  // Unholy Frenzy
             case 63560:  // Dark Transformation
@@ -297,6 +298,32 @@ uint32 CountNearbyEnemies(Player* bot, float range)
     return count ? count : 1;
 }
 
+uint32 CountEnemiesNear(Player* bot, Unit* around, float range)
+{
+    if (!bot || !around || range <= 0.0f)
+        return 0;
+
+    std::list<Unit*> list;
+    Skyfire::AnyUnfriendlyUnitInObjectRangeCheck check(around, bot, range);
+    Skyfire::UnitListSearcher<Skyfire::AnyUnfriendlyUnitInObjectRangeCheck> searcher(bot, list, check);
+    around->VisitNearbyObject(range, searcher);
+
+    uint32 count = 0;
+    bool sawCenter = false;
+    for (Unit* u : list)
+    {
+        if (!u || !u->IsAlive() || !bot->IsValidAttackTarget(u))
+            continue;
+        if (u == around)
+            sawCenter = true;
+        ++count;
+    }
+    // The grid search does not always yield the unit it is centered on.
+    if (!sawCenter && around->IsAlive() && bot->IsValidAttackTarget(around))
+        ++count;
+    return count;
+}
+
 bool WantsCooldowns(Context const& ctx)
 {
     if (!ctx.bot || !ctx.target || !StrategyOn(ctx.bot, "boost"))
@@ -306,7 +333,10 @@ bool WantsCooldowns(Context const& ctx)
     if (Creature const* creature = ctx.target->ToCreature())
         if (creature->isWorldBoss() || creature->IsDungeonBoss() || creature->isElite())
             return true;
-    return CountNearbyEnemies(ctx.bot, 10.0f) >= 3;
+    // Ranged bots stand outside the pack, so also count enemies on the target.
+    if (CountNearbyEnemies(ctx.bot, 10.0f) >= 3)
+        return true;
+    return CountEnemiesNear(ctx.bot, ctx.target, 8.0f) >= 3;
 }
 
 bool HasGroundEffect(Player* bot, uint32 spellId)
@@ -663,7 +693,9 @@ bool CastSpell(Player* bot, Unit* enemy, uint32 spellId)
     // Only force self for known self-buffs / ground AoE. Do NOT use
     // !NeedsExplicitUnitTarget() — that redirected many damage spells onto the
     // caster and made every cast fail (no abilities on recount).
-    Unit* castTarget = IsSelfCastInRotation(spellId) ? static_cast<Unit*>(bot) : enemy;
+    // Cone of Cold has no unit target; it hits whatever is in front of the caster.
+    bool const cone = spellId == 120;
+    Unit* castTarget = (IsSelfCastInRotation(spellId) || cone) ? static_cast<Unit*>(bot) : enemy;
     if (!castTarget)
         return false;
 
@@ -679,7 +711,9 @@ bool CastSpell(Player* bot, Unit* enemy, uint32 spellId)
     // Off-GCD spells (Taunt, etc.) must not StopMoving — that cancels Charge mid-flight
     // when we fire taunt in the same tick after a successful Charge.
     bool const offGcd = info->StartRecoveryTime == 0;
-    if (castTarget != bot)
+    if (cone && enemy)
+        PrepareHostileCast(bot, enemy);
+    else if (castTarget != bot)
     {
         if (offGcd)
         {
@@ -1864,7 +1898,14 @@ uint32 SelectNextSpell(Player* bot, Unit* target)
     ctx.bot = bot;
     ctx.target = target;
     ctx.enemies = CountNearbyEnemies(bot, 10.0f);
-    if (!StrategyOn(bot, "aoe"))
+    if (StrategyOn(bot, "aoe"))
+    {
+        // Ranged bots stand outside the pack, so count enemies on the target too.
+        uint32 const packed = CountEnemiesNear(bot, target, 8.0f);
+        if (packed > ctx.enemies)
+            ctx.enemies = packed;
+    }
+    else
         ctx.enemies = 1;
     ctx.targetHealthPct = UnitHealthPct(target);
     ctx.comboPoints = bot->GetComboPoints();

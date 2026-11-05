@@ -3,6 +3,8 @@
 
 #include "BotRotationLists.h"
 #include "Player.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Unit.h"
 
 namespace BotRotation
@@ -53,7 +55,42 @@ namespace
         SUMMON_WATER_ELEMENTAL = 31687,
         CONE_OF_COLD        = 120,
         BLIZZARD            = 10,
+        FIRE_BLAST          = 2136,
+        FROST_NOVA          = 122,
     };
+
+    // Best mage armor the bot actually knows. Frost Armor is 54, so a level 46
+    // frost mage is still on Molten Armor; cast that instead of skipping armor.
+    uint32 SelectKnownArmor(Player* bot, uint32 preferred)
+    {
+        uint32 const order[] = { preferred, FROST_ARMOR, MOLTEN_ARMOR, MAGE_ARMOR };
+        uint32 best = 0;
+        for (uint32 id : order)
+        {
+            if (!bot->HasSpell(id))
+                continue;
+            best = id;
+            break;
+        }
+        if (!best || HasAuraUp(bot, best))
+            return 0;
+        return CanTryCast(bot, best) ? best : 0;
+    }
+
+    bool InSpellRange(Player* bot, Unit* target, uint32 spellId, float fallback)
+    {
+        if (!bot || !target)
+            return false;
+        float range = fallback;
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId))
+        {
+            // false: hostile range. Friend range is 0 on damage spells.
+            float const maxRange = info->GetMaxRange(false, bot);
+            if (maxRange > 1.0f)
+                range = maxRange;
+        }
+        return bot->IsWithinDistInMap(target, range);
+    }
 
     float ManaPct(Player* bot)
     {
@@ -174,8 +211,8 @@ uint32 SelectFrostMage(Context const& ctx)
     if (!bot || !target)
         return 0;
 
-    if (!HasAuraUp(bot, FROST_ARMOR) && CanTryCast(bot, FROST_ARMOR))
-        return FROST_ARMOR;
+    if (uint32 const armor = SelectKnownArmor(bot, FROST_ARMOR))
+        return armor;
     if (!bot->GetPet() && CanTryCast(bot, SUMMON_WATER_ELEMENTAL))
         return SUMMON_WATER_ELEMENTAL;
 
@@ -187,7 +224,9 @@ uint32 SelectFrostMage(Context const& ctx)
     uint32 const fingers = AuraStacks(bot, FINGERS_OF_FROST);
     bool const brainFreeze = HasAuraUp(bot, BRAIN_FREEZE);
 
-    if (fingers >= 2 && CanTryCast(bot, ICE_LANCE))
+    // Spend Fingers of Frost before another Frostbolt. Brain Freeze (level 77)
+    // is what makes Frostfire Bolt free; until then it is not the filler.
+    if (fingers >= 1 && CanTryCast(bot, ICE_LANCE))
         return ICE_LANCE;
     if (brainFreeze && CanTryCast(bot, FROSTFIRE_BOLT))
         return FROSTFIRE_BOLT;
@@ -198,19 +237,30 @@ uint32 SelectFrostMage(Context const& ctx)
     if (CanTryCast(bot, FROZEN_ORB))
         return FROZEN_ORB;
 
-    if (ctx.enemies >= 3 && !HasGroundEffect(bot, BLIZZARD) && CanTryCast(bot, BLIZZARD))
-        return BLIZZARD;
+    // Cone (12 yd) and Frost Nova (12 yd) only reach something already in melee.
+    if (InSpellRange(bot, target, CONE_OF_COLD, 12.0f) && CanTryCast(bot, CONE_OF_COLD))
+        return CONE_OF_COLD;
+    if (CountEnemiesNear(bot, bot, 12.0f) >= 1 && CanTryCast(bot, FROST_NOVA))
+        return FROST_NOVA;
 
-    if (ctx.enemies >= 5 && bot->GetDistance(target) <= 8.0f)
+    // Blizzard is level 52. Flamestrike (44, 8 yd around the target) covers a
+    // pack until then. ctx.enemies is 1 while the aoe strategy is off.
+    if (ctx.enemies >= 3)
     {
-        if (CanTryCast(bot, CONE_OF_COLD))
-            return CONE_OF_COLD;
-        if (CanTryCast(bot, ARCANE_EXPLOSION))
+        if (!HasGroundEffect(bot, BLIZZARD) && CanTryCast(bot, BLIZZARD))
+            return BLIZZARD;
+        if (!bot->HasSpell(BLIZZARD) && !HasGroundEffect(bot, FLAMESTRIKE)
+            && CanTryCast(bot, FLAMESTRIKE))
+            return FLAMESTRIKE;
+        if (CountEnemiesNear(bot, bot, 10.0f) >= 3 && CanTryCast(bot, ARCANE_EXPLOSION))
             return ARCANE_EXPLOSION;
     }
 
-    if (fingers >= 1 && CanTryCast(bot, ICE_LANCE))
-        return ICE_LANCE;
+    // Fire Blast is the instant until Frozen Orb exists. After that it only
+    // fills movement, so it does not replace Frostbolt.
+    if ((!bot->HasSpell(FROZEN_ORB) || !bot->IsStopped())
+        && InSpellRange(bot, target, FIRE_BLAST, 30.0f) && CanTryCast(bot, FIRE_BLAST))
+        return FIRE_BLAST;
     if (CanTryCast(bot, FROSTBOLT))
         return FROSTBOLT;
 
