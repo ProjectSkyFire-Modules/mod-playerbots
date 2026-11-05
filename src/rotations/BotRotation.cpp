@@ -115,6 +115,7 @@ namespace
             case 108215: // Paralytic Poison (non-lethal)
             case 26573:  // Consecration
             case 768:    // Cat Form
+            case 62078:  // Swipe (Cat), area around the caster
             case 52610:  // Savage Roar
             case 5217:   // Tiger's Fury
             case 106951: // Berserk (feral)
@@ -640,6 +641,17 @@ bool ReadyToShapeshift(Player* bot, uint32 formSpellId)
         return false;
     if (bot->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
         bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+    return true;
+}
+
+bool BreakFormForSpell(Player* bot, uint32 spellId)
+{
+    SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+    if (!bot || !info || !bot->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+        return false;
+    if (info->CheckShapeshift(bot->GetShapeshiftForm()) == SpellCastResult::SPELL_CAST_OK)
+        return false;
+    bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
     return true;
 }
 

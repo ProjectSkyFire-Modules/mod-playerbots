@@ -1837,7 +1837,7 @@ bool PlayerbotAI::HandleCombat()
         ClearTravelDestination();
 
     // Spec decides stance (e.g. Elemental ranged, Enhancement melee). Tanks always melee.
-    // Healers in healer-dps mode plant like ranged — never chase into melee formation.
+    // Caster healers stay at cast range. Melee healer-dps (mistweaver, holy, cat) closes.
     bool const ranged = GetCombatRole() != CombatRole::Tank && !IsMeleeHealerDps()
         && (IsRangedClass() || GetCombatRole() == CombatRole::Healer);
     bool const inMelee = _bot->IsWithinMeleeRange(target);
@@ -2479,8 +2479,18 @@ bool PlayerbotAI::IsPureCaster() const
 
 bool PlayerbotAI::IsMeleeHealerDps() const
 {
-    return _bot && _healerDps && _bot->getClass() == CLASS_MONK
-        && GetCombatRole() == CombatRole::Healer;
+    if (!_bot || !_healerDps || GetCombatRole() != CombatRole::Healer)
+        return false;
+    switch (_bot->getClass())
+    {
+        case CLASS_MONK:     // Fistweave
+        case CLASS_PALADIN:  // Crusader Strike and seal swings
+            return true;
+        case CLASS_DRUID:    // Cat Form is level 8; Wrath until then.
+            return _bot->HasSpell(768);
+        default:
+            return false;
+    }
 }
 
 void PlayerbotAI::DebugCombat(std::string const& action)
@@ -3044,8 +3054,15 @@ bool PlayerbotAI::HandleHealing(float belowPct)
         sPlayerbotMgr->GetSaveManaThreshold());
     if (!healId)
         healId = GetHealSpell();
-    if (!healId || !BotRotation::CanTryCast(_bot, healId))
+    if (!healId)
         return false;
+    if (!BotRotation::CanTryCast(_bot, healId))
+    {
+        // Cat Form (resto catweave) cannot cast heals. Drop it, then cast.
+        bool const broke = BotRotation::BreakFormForSpell(_bot, healId);
+        if (!broke || !BotRotation::CanTryCast(_bot, healId))
+            return broke;
+    }
 
     constexpr float HEAL_RANGE = 40.0f;
     if (!_bot->IsWithinDistInMap(ally, HEAL_RANGE) || !_bot->IsWithinLOSInMap(ally))

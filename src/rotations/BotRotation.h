@@ -105,6 +105,9 @@ namespace BotRotation
     // shapeshift first — form spells have SPELL_ATTR0_NOT_SHAPESHIFT, so Bear /
     // Cat / Moonkin fail while another form is already up.
     bool ReadyToShapeshift(Player* bot, uint32 formSpellId);
+    // Drop Cat / Moonkin / etc. when `spellId` cannot be cast in the current form.
+    // Returns true if a form was removed.
+    bool BreakFormForSpell(Player* bot, uint32 spellId);
     bool IsSelfCastSpell(uint32 spellId);
     // Off-hand is an actual shield (not a held weapon / tome).
     bool HasShieldEquipped(Player* bot);

@@ -50,6 +50,8 @@ uint32 SelectHolyPaladinDps(Context const& ctx)
         return HAMMER_OF_WRATH;
     if (CanTryCast(bot, HOLY_PRISM))
         return HOLY_PRISM;
+    // Holy Shock and Judgment are ranged. Crusader Strike is 5 yards, and the
+    // healer-dps paladin closes to melee so it and the seal swings actually land.
     if (CanTryCast(bot, HOLY_SHOCK))
         return HOLY_SHOCK;
     if (CanTryCast(bot, JUDGMENT))
@@ -167,35 +169,47 @@ uint32 SelectRestorationDruidDps(Context const& ctx)
     enum Spells : uint32
     {
         MARK_OF_THE_WILD    = 1126,
-        MOONKIN_FORM        = 24858, // may be unknown on pure resto
-        WRATH               = 5176,
-        STARFIRE            = 2912,
+        CAT_FORM            = 768,
+        RAKE                = 1822,
+        SWIPE_CAT           = 62078,
+        FEROCIOUS_BITE      = 22568,
+        MANGLE_CAT          = 33876,
         MOONFIRE            = 8921,
-        SUNFIRE             = 93402,
-        STARSURGE           = 78674,
+        WRATH               = 5176,
         HURRICANE           = 16914,
     };
 
     if (!HasAuraUp(bot, MARK_OF_THE_WILD) && CanTryCast(bot, MARK_OF_THE_WILD))
         return MARK_OF_THE_WILD;
-    if (ReadyToShapeshift(bot, MOONKIN_FORM))
-        return MOONKIN_FORM;
 
-    if (ctx.enemies >= 3 && CanTryCast(bot, HURRICANE))
-        return HURRICANE;
+    // Cat Form is level 8. Before that, stay a caster (Wrath / Moonfire).
+    if (!bot->HasSpell(CAT_FORM))
+    {
+        if (ctx.enemies >= 3 && CanTryCast(bot, HURRICANE))
+            return HURRICANE;
+        if (NeedsMyAuraRefresh(bot, target, MOONFIRE, 2.0f) && CanTryCast(bot, MOONFIRE))
+            return MOONFIRE;
+        if (CanTryCast(bot, WRATH))
+            return WRATH;
+        return 0;
+    }
 
-    if ((!HasAuraUp(target, MOONFIRE) || AuraRemains(target, MOONFIRE) <= 2.0f)
-        && CanTryCast(bot, MOONFIRE))
-        return MOONFIRE;
-    if ((!HasAuraUp(target, SUNFIRE) || AuraRemains(target, SUNFIRE) <= 2.0f)
-        && CanTryCast(bot, SUNFIRE))
-        return SUNFIRE;
-    if (CanTryCast(bot, STARSURGE))
-        return STARSURGE;
-    if (CanTryCast(bot, STARFIRE))
-        return STARFIRE;
-    if (CanTryCast(bot, WRATH))
-        return WRATH;
+    if (ReadyToShapeshift(bot, CAT_FORM))
+        return CAT_FORM;
+
+    // Resto does not learn Shred, Rip, or Savage Roar. Rake builds combo points.
+    if (NeedsMyAuraRefresh(bot, target, RAKE, 3.0f) && CanTryCast(bot, RAKE))
+        return RAKE;
+    if (ctx.enemies >= 3 && CanTryCast(bot, SWIPE_CAT))
+        return SWIPE_CAT;
+    if (ctx.comboPoints >= 5 && CanTryCast(bot, FEROCIOUS_BITE))
+        return FEROCIOUS_BITE;
+    if (CanTryCast(bot, MANGLE_CAT))
+        return MANGLE_CAT;
+    if (ctx.comboPoints >= 1 && ctx.targetHealthPct <= 20.0f && CanTryCast(bot, FEROCIOUS_BITE))
+        return FEROCIOUS_BITE;
+    if (CanTryCast(bot, RAKE))
+        return RAKE;
     return 0;
 }
 
