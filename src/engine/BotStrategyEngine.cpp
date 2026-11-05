@@ -124,6 +124,7 @@ std::string BotStrategyEngine::NormalizeName(std::string name)
     }
 
     if (out == "tankassist") out = "tank assist";
+    if (out == "autowalk" || out == "auto walk") out = "walk";
     if (out == "healdps" || out == "heal dps") out = "healer dps";
     if (out == "savemana") out = "save mana";
     if (out == "dpsassist") out = "dps assist";
@@ -135,7 +136,7 @@ std::string BotStrategyEngine::NormalizeName(std::string name)
 
 bool BotStrategyEngine::IsKnown(std::string const& name, BotState state) const
 {
-    if (name == "passive" || name == "grind")
+    if (name == "passive" || name == "grind" || name == "walk")
         return true;
 
     if (state == BotState::NonCombat)
@@ -151,7 +152,7 @@ bool BotStrategyEngine::IsKnown(std::string const& name, BotState state) const
 
 bool BotStrategyEngine::IsRoleAllowed(std::string const& name, BotState state, bool isTank, bool isHealer) const
 {
-    if (name == "passive" || name == "grind")
+    if (name == "passive" || name == "grind" || name == "walk")
         return true;
     if (state == BotState::NonCombat)
     {
@@ -227,6 +228,9 @@ void BotStrategyEngine::Add(std::string const& rawName, BotState state)
         return;
     SetFor(state).insert(name);
     ApplyMutualExclusions(name, state, true);
+    // One switch: nc +walk and co +walk enable the same self-bot movement.
+    if (name == "walk")
+        SetFor(state == BotState::Combat ? BotState::NonCombat : BotState::Combat).insert(name);
 }
 
 void BotStrategyEngine::Remove(std::string const& rawName, BotState state)
@@ -235,6 +239,8 @@ void BotStrategyEngine::Remove(std::string const& rawName, BotState state)
     if (name.empty())
         return;
     SetFor(state).erase(name);
+    if (name == "walk")
+        SetFor(state == BotState::Combat ? BotState::NonCombat : BotState::Combat).erase(name);
 }
 
 void BotStrategyEngine::Toggle(std::string const& rawName, BotState state)
@@ -278,16 +284,16 @@ std::string BotStrategyEngine::Format(BotState state) const
     // List known names for this state/role with +/- like AC "?".
     std::vector<std::string> names;
     if (state == BotState::NonCombat)
-        names = { "food", "follow", "stay", "loot", "quests", "heal", "passive", "grind" };
+        names = { "food", "follow", "stay", "loot", "quests", "heal", "passive", "grind", "walk" };
     else if (_isTank)
         names = { "passive", "grind", "tank", "tank assist", "dps",
-                  "aoe", "boost", "cc", "avoid aoe" };
+                  "aoe", "boost", "cc", "avoid aoe", "walk" };
     else if (_isHealer)
         names = { "passive", "grind", "heal", "healer dps", "save mana", "wait for attack",
-                  "aoe", "boost", "cc", "avoid aoe" };
+                  "aoe", "boost", "cc", "avoid aoe", "walk" };
     else
         names = { "passive", "grind", "dps", "dps assist", "threat", "wait for attack", "offheal",
-                  "aoe", "boost", "cc", "avoid aoe" };
+                  "aoe", "boost", "cc", "avoid aoe", "walk" };
 
     std::string out;
     for (std::string const& n : names)

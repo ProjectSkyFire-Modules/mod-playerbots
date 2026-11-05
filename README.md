@@ -37,9 +37,12 @@ This module is being ported in phases. What is present today:
 `.playerbots self` attaches AI to **your** character without replacing the
 client session:
 
-* You move and jump as normal.
+* You move and jump as normal until you whisper yourself `nc +walk`.
 * In combat the AI picks a target (selection / attackers / `attack` order) and
   casts the class filler when you are in range with LoS.
+* `nc +walk` / `co +walk` (and `-walk`) lets the bot path to loot, to the right
+  target, and out of bad ground, then gives you the keys back while it is idle.
+  See [COMMANDS.md](COMMANDS.md).
 * `.playerbots init` refreshes gear and spec. On yourself: `.playerbots init`
   or `.playerbots init self`. Whisper a bot `autogear` to upgrade its gear for
   its current spec, or `maintenance` to refresh spells/talents/glyphs/mounts,

@@ -7,7 +7,10 @@
 * Phase 3 (foundation): one PlayerbotAI instance drives one bot Player, ticked
 * from PlayerScript::OnUpdate. Chat orders (whisper / party / raid) set
 * movement and combat modes; combat and follow build on top of those.
-* Self-bots keep client movement and only run cast-only combat.
+* Self-bots keep client movement and only run cast-only combat, unless
+* `nc +walk` / `co +walk` is on. Walk takes the keys to loot, to reach the
+* right target (tanks peel), and to leave bad ground, then gives them back
+* while the bot is idle.
 *
 * Strategies (AC-style co/nc) are role-gated: tanks never take healer flags,
 * healers never take tank flags, etc. Class rotations still run underneath.
@@ -41,7 +44,8 @@ struct MountCapabilityEntry;
 class PlayerbotAI
 {
 public:
-    // clientControlled: real player keeps WASD; AI only casts (self-bot mode).
+    // clientControlled: real player keeps WASD; AI only casts (self-bot mode),
+    // unless walk is enabled (see IsSelfWalkEnabled).
     explicit PlayerbotAI(Player* bot, bool clientControlled = false);
     ~PlayerbotAI();
 
@@ -73,6 +77,17 @@ public:
     // Relog creates a new Player with the same GUID; keep _bot on the live object.
     void Rebind(Player* bot) { _bot = bot; }
     bool IsClientControlled() const { return _clientControlled; }
+    // Self-bot `nc +walk` / `co +walk`: one switch (either prefix sets both).
+    // The bot walks to loot, to its target, and out of ground hazards, and
+    // releases the character whenever it is not doing that.
+    bool IsSelfWalkEnabled() const { return _walk; }
+    // True while the server currently owns this character's movement.
+    bool IsSelfWalkDriving() const { return _selfWalkDriving; }
+    // A movement helper is about to path this character. Takes client control
+    // when walk is on. No-op for socket bots and when walk is off.
+    void ClaimSelfMovement();
+    // Give WASD back and stop any spline the bot started.
+    void ReleaseSelfMovement();
 
     // Copy a real player's MoP phase-id set onto this bot and refresh that
     // player's client visibility of the bot (needed when not in a group).
@@ -352,6 +367,13 @@ private:
     bool HasGrayJunk() const;
     uint32 SellGrayJunk(Creature* vendor);
     void MoveToPosition(float x, float y, float z);
+    // Socket bots always. Self-bots only while +walk is on.
+    bool BotMayMove() const { return !_clientControlled || _walk; }
+    // Self-bot +walk, and the player currently has the keys (bot is not pathing).
+    bool PlayerKeepsMove() const { return _clientControlled && _walk && !_selfWalkDriving; }
+    // After a decision tick: keep control if a path is still running, else release.
+    void FinishSelfWalkTick();
+    bool SelfWalkMotionActive() const;
 
     Player* _bot;
     bool _clientControlled;
@@ -430,7 +452,12 @@ private:
     bool _boost;         // trinkets + offensive racials
     bool _cc;            // crowd control utilities
     bool _avoidAoe;      // step out of ground effects, traps, and trigger creatures
+    bool _walk;          // self-bot: bot may path (loot, target, avoid); idle = player
     bool _debugCombat;   // say casting / combat actions in chat
+    // Server currently owns the self-bot's client (SMSG_CLIENT_CONTROL_UPDATE 0).
+    bool _selfWalkDriving = false;
+    // A movement helper ran during this decision tick.
+    bool _selfWalkClaimed = false;
 
     bool _forceRest;
     bool _resting;

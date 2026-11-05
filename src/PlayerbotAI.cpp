@@ -349,6 +349,7 @@ PlayerbotAI::PlayerbotAI(Player* bot, bool clientControlled)
       _threat(false), _healerDps(false), _saveMana(false), _offHeal(false), _ncHeal(false),
       _waitForAttack(false),
       _aoe(false), _boost(true), _cc(false), _avoidAoe(true),
+      _walk(false),
       _debugCombat(false),
       _forceRest(false), _resting(false), _holdAssist(false),
       _forcedTargetGuid(0), _lfgRoleResponded(false), _lfgProposalResponded(false),
@@ -359,7 +360,10 @@ PlayerbotAI::PlayerbotAI(Player* bot, bool clientControlled)
     _wasGrouped = _bot && _bot->GetGroup();
 }
 
-PlayerbotAI::~PlayerbotAI() = default;
+PlayerbotAI::~PlayerbotAI()
+{
+    ReleaseSelfMovement();
+}
 
 void PlayerbotAI::ResetStrategiesToRoleDefaults()
 {
@@ -437,6 +441,9 @@ void PlayerbotAI::SyncFlagsFromStrategies()
     _boost = _strategies.Has("boost", BotState::Combat);
     _cc = _strategies.Has("cc", BotState::Combat);
     _avoidAoe = _strategies.Has("avoid aoe", BotState::Combat);
+    bool const wasWalk = _walk;
+    _walk = _strategies.Has("walk", BotState::NonCombat)
+        || _strategies.Has("walk", BotState::Combat);
     _debugCombat = _strategies.Has("debug", BotState::Combat)
         || _strategies.Has("debug", BotState::NonCombat);
     if (_strategies.Has("heal", BotState::Combat))
@@ -448,7 +455,94 @@ void PlayerbotAI::SyncFlagsFromStrategies()
     if (GetCombatRole() == CombatRole::Damage && !_dpsMode)
         _dpsMode = true; // damage bots always "dps" unless somehow cleared
 
+    if (_clientControlled && wasWalk && !_walk)
+        ReleaseSelfMovement();
+
     RebuildAiEngine();
+}
+
+void PlayerbotAI::ClaimSelfMovement()
+{
+    if (!_clientControlled || !_walk || !_bot || !_bot->IsInWorld())
+        return;
+
+    _selfWalkClaimed = true;
+    if (_selfWalkDriving)
+        return;
+
+    _selfWalkDriving = true;
+    if (_bot->GetSession())
+        _bot->SetClientControl(_bot, 0);
+}
+
+void PlayerbotAI::ReleaseSelfMovement()
+{
+    bool const wasDriving = _selfWalkDriving;
+    if (!wasDriving && !_selfWalkClaimed)
+        return;
+
+    _selfWalkDriving = false;
+    _selfWalkClaimed = false;
+    if (!_bot || !_bot->IsInWorld())
+        return;
+
+    // Stop the spline we started. Skip while a cast is in progress — StopAndIdle
+    // refuses then, and cutting the cast is worse than finishing it server-side.
+    if (wasDriving && !BotMovement::IsCasting(_bot))
+        BotMovement::StopAndIdle(_bot);
+
+    if (_bot->GetSession())
+        _bot->SetClientControl(_bot, 1);
+}
+
+bool PlayerbotAI::SelfWalkMotionActive() const
+{
+    if (!_bot)
+        return false;
+
+    // Chase and follow keep steering after each spline. A finished point/flee
+    // spline must not hold the keys just because the generator has not idled yet.
+    MovementGeneratorType const moveType = _bot->GetMotionMaster()->GetCurrentMovementGeneratorType();
+    switch (moveType)
+    {
+        case CHASE_MOTION_TYPE:
+        case FOLLOW_MOTION_TYPE:
+            return true;
+        case POINT_MOTION_TYPE:
+        case FLEEING_MOTION_TYPE:
+        case CONFUSED_MOTION_TYPE:
+            return _bot->movespline && !_bot->movespline->Finalized();
+        default:
+            return false;
+    }
+}
+
+void PlayerbotAI::FinishSelfWalkTick()
+{
+    if (!_clientControlled)
+        return;
+
+    if (!_walk)
+    {
+        ReleaseSelfMovement();
+        return;
+    }
+
+    // Still on a path from this tick or an earlier one that was not reissued
+    // (already walking, generator still POINT/CHASE). Keep the keys.
+    if (_selfWalkClaimed || SelfWalkMotionActive())
+    {
+        if (!_selfWalkDriving)
+            ClaimSelfMovement();
+        return;
+    }
+
+    // A cast we started while driving must finish before the client takes over,
+    // or the spline and the player's keys fight the cast bar.
+    if (_selfWalkDriving && BotMovement::IsCasting(_bot))
+        return;
+
+    ReleaseSelfMovement();
 }
 
 void PlayerbotAI::RebuildAiEngine()
@@ -1288,6 +1382,7 @@ void PlayerbotAI::UpdateAI(uint32 diff)
     HandleLootRolls();
     if (!_bot->IsAlive())
     {
+        ReleaseSelfMovement();
         TryAcceptResurrect();
         return;
     }
@@ -1359,12 +1454,27 @@ void PlayerbotAI::UpdateAI(uint32 diff)
         return;
 
     // AC-style Trigger → Action → Queue. MoP rotations run inside the combat action.
+    // Self-walk releases the keys only after a full decision, so a buff cast
+    // that returns early above does not cancel a path already in progress.
+    _selfWalkClaimed = false;
+    struct SelfWalkTickGuard
+    {
+        PlayerbotAI* ai;
+        bool armed = true;
+        ~SelfWalkTickGuard()
+        {
+            if (armed)
+                ai->FinishSelfWalkTick();
+        }
+    } selfWalkTick{ this };
+
     if (_aiEngine && _aiEngine->DoNextAction())
         return;
 
     // Fallback if the engine queued nothing useful (should be rare).
-    if (_clientControlled)
+    if (_clientControlled && !_walk)
     {
+        selfWalkTick.armed = false;
         if (HandleCombatCastOnly())
             return;
         // Self-bot: never auto-drink while combat is active (engine RestAction
@@ -1390,6 +1500,14 @@ void PlayerbotAI::UpdateAI(uint32 diff)
         return;
     if (HandleRest())
         return;
+    // +walk never follows or wanders — those would hold the keys forever.
+    // Loot, combat positioning, and avoid run above (engine or HandleCombat).
+    if (_clientControlled && _walk)
+    {
+        if (HandleLoot())
+            return;
+        return;
+    }
     if (_stay)
     {
         HandleStay();
@@ -1618,7 +1736,7 @@ bool PlayerbotAI::HandleCombat()
     // Non-tanks with +wait for attack hold DPS until the tank has threat time.
     if (ShouldWaitForAttack())
     {
-        if (!_clientControlled && !_stay)
+        if (BotMayMove() && !_stay)
         {
             // Healers / ranged: hold cast range off the fight — do not trail the master.
             if (GetCombatRole() == CombatRole::Healer)
@@ -1631,7 +1749,7 @@ bool PlayerbotAI::HandleCombat()
                 if (Unit* t = SelectTarget())
                     HoldRangedCombatPosition(t, BOT_CAST_DIST);
             }
-            else
+            else if (!_clientControlled)
                 HandleFollow();
         }
         return true;
@@ -1668,7 +1786,7 @@ bool PlayerbotAI::HandleCombat()
             if (GroupInCombat() || !_bot->getAttackers().empty())
             {
                 StopResting();
-                if (!_clientControlled && !_stay)
+                if (BotMayMove() && !_stay)
                 {
                     if (Unit* anchor = SelectHealerCombatAnchor())
                         HoldRangedCombatPosition(anchor, BOT_CAST_DIST);
@@ -1700,6 +1818,14 @@ bool PlayerbotAI::HandleCombat()
                 _bot->SetSelection(0);
         _chaseGuid = 0;
         StopHunterAutoShot();
+        // Drop a chase/point left over from the pull so +walk gives the keys back.
+        if (_clientControlled && _walk && !IsBusyCasting(_bot))
+        {
+            MovementGeneratorType moveType = _bot->GetMotionMaster()->GetCurrentMovementGeneratorType();
+            if (moveType == CHASE_MOTION_TYPE || moveType == POINT_MOTION_TYPE
+                || moveType == FLEEING_MOTION_TYPE)
+                BotMovement::StopAndIdle(_bot);
+        }
         return false;
     }
 
@@ -1730,7 +1856,7 @@ bool PlayerbotAI::HandleCombat()
             _bot->SendMeleeAttackStop(target);
         }
         // Stay near the fight without dealing damage so threat can decay.
-        if (!_clientControlled && !ranged && !inMelee)
+        if (BotMayMove() && !ranged && !inMelee)
         {
             MovementGeneratorType moveType = _bot->GetMotionMaster()->GetCurrentMovementGeneratorType();
             bool reissue = _chaseGuid != target->GetGUID()
@@ -1742,6 +1868,12 @@ bool PlayerbotAI::HandleCombat()
                     _chaseGuid = target->GetGUID();
             }
         }
+        else if (_clientControlled && _walk && !IsBusyCasting(_bot)
+            && _bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE)
+        {
+            // In range under throttle: drop chase so +walk can hand the keys back.
+            BotMovement::StopAndIdle(_bot);
+        }
         return true;
     }
 
@@ -1749,7 +1881,7 @@ bool PlayerbotAI::HandleCombat()
     {
         // Always open with chase when out of melee — taunt spam must not replace
         // closing the gap (casts stop movement; MoveChase is blocked while casting).
-        if (!inMelee && !_clientControlled)
+        if (!inMelee && BotMayMove())
         {
             MovementGeneratorType moveType = _bot->GetMotionMaster()->GetCurrentMovementGeneratorType();
             bool const casting = IsBusyCasting(_bot);
@@ -1763,14 +1895,21 @@ bool PlayerbotAI::HandleCombat()
             }
         }
         else
+        {
+            // In melee: stop chasing so +walk returns the keys. Cast-only self-bots
+            // never started a chase. Socket bots keep chase (it holds contact).
+            if (inMelee && _clientControlled && _walk && !IsBusyCasting(_bot)
+                && _bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE)
+                BotMovement::StopAndIdle(_bot);
             _chaseGuid = target->GetGUID();
+        }
 
         _bot->Attack(target, true);
         DebugCombat("Melee auto-attack");
 
         if (inMelee)
         {
-            if (!_bot->HasInArc(static_cast<float>(M_PI), target))
+            if (!PlayerKeepsMove() && !_bot->HasInArc(static_cast<float>(M_PI), target))
                 _bot->SetInFront(target);
             if (GetCombatRole() == CombatRole::Tank && _tankMode)
             {
@@ -1783,7 +1922,7 @@ bool PlayerbotAI::HandleCombat()
         {
             // Closing: Charge first (Throw only if Charge unavailable). Tanks may
             // also fire off-GCD Taunt after Charge — never Charge+Throw same tick.
-            if (!_bot->HasInArc(static_cast<float>(M_PI), target))
+            if (!PlayerKeepsMove() && !_bot->HasInArc(static_cast<float>(M_PI), target))
                 _bot->SetInFront(target);
             if (GetCombatRole() == CombatRole::Tank && _tankMode)
                 DoTankExtras(target, /*closing=*/true);
@@ -1856,18 +1995,24 @@ bool PlayerbotAI::HandleCombat()
     {
         // Never StopMoving / Clear while casting — that interrupts the spell.
         // Also skip if already planted: StopAndIdle every tick pauses Auto Shot.
-        if (!casting && !_bot->IsStopped())
+        // +walk with the keys returned must not cancel a strafe or snap facing.
+        if (!PlayerKeepsMove())
         {
-            BotMovement::StopAndIdle(_bot);
-            _bot->SetSelection(target->GetGUID());
-            BotMovement::FaceUnit(_bot, target);
-        }
-        else if (!casting)
-        {
-            _bot->SetSelection(target->GetGUID());
-            if (!_bot->HasInArc(static_cast<float>(M_PI), target))
+            if (!casting && !_bot->IsStopped())
+            {
+                BotMovement::StopAndIdle(_bot);
+                _bot->SetSelection(target->GetGUID());
                 BotMovement::FaceUnit(_bot, target);
+            }
+            else if (!casting)
+            {
+                _bot->SetSelection(target->GetGUID());
+                if (!_bot->HasInArc(static_cast<float>(M_PI), target))
+                    BotMovement::FaceUnit(_bot, target);
+            }
         }
+        else
+            _bot->SetSelection(target->GetGUID());
 
         _chaseGuid = target->GetGUID();
         StartHunterAutoShot(target);
@@ -2140,15 +2285,21 @@ Unit* PlayerbotAI::SelectTarget()
             }
     }
 
-    // Self-bot: use the player's current hostile selection (open or in combat).
+    // Self-bot: use the player's current hostile selection.
+    // +walk does not pull just because a nameplate is targeted out of combat —
+    // that would take the keys whenever they click a mob. `attack` still forces
+    // a target. In combat, selection is the last resort after peel / assist.
     if (_clientControlled)
     {
-        if (Unit* selected = _bot->GetSelectedUnit())
-            if (selected->IsAlive() && _bot->IsValidAttackTarget(selected))
-            {
-                _targets.SetCurrentTarget(selected);
-                return selected;
-            }
+        bool const allowSelection = !_walk || _bot->IsInCombat() || GroupInCombat()
+            || !_bot->getAttackers().empty();
+        if (allowSelection)
+            if (Unit* selected = _bot->GetSelectedUnit())
+                if (selected->IsAlive() && _bot->IsValidAttackTarget(selected))
+                {
+                    _targets.SetCurrentTarget(selected);
+                    return selected;
+                }
     }
 
     return nullptr;
@@ -2634,7 +2785,7 @@ void PlayerbotAI::DoRotation(Unit* target)
     if (BotRotation::IsBursting(_bot) && BotRotation::TryTrinkets(_bot))
         return;
 
-    if (!_clientControlled && !_stay && !_bot->IsStopped())
+    if (BotMayMove() && !PlayerKeepsMove() && !_stay && !_bot->IsStopped())
         BotMovement::StopAndIdle(_bot);
 
     // Hunter: Auto Shot stays armed. GCD shots only:
@@ -2837,16 +2988,16 @@ bool PlayerbotAI::HandleResurrect()
     constexpr float REZ_RANGE = 30.0f;
     if (!_bot->IsWithinDistInMap(dead, REZ_RANGE))
     {
-        if (!_clientControlled)
-        {
-            _bot->GetMotionMaster()->Clear();
-            _bot->GetMotionMaster()->MoveChase(dead, 0.0f);
-            _chaseGuid = dead->GetGUID();
-        }
+        if (!BotMayMove())
+            return false;
+        ClaimSelfMovement();
+        _bot->GetMotionMaster()->Clear();
+        _bot->GetMotionMaster()->MoveChase(dead, 0.0f);
+        _chaseGuid = dead->GetGUID();
         return true;
     }
 
-    if (!_clientControlled && !_bot->IsWithinMeleeRange(dead))
+    if (BotMayMove() && !PlayerKeepsMove() && !_bot->IsWithinMeleeRange(dead))
         _bot->StopMoving();
 
     _bot->SetSelection(dead->GetGUID());
@@ -2899,12 +3050,12 @@ bool PlayerbotAI::HandleHealing(float belowPct)
     constexpr float HEAL_RANGE = 40.0f;
     if (!_bot->IsWithinDistInMap(ally, HEAL_RANGE) || !_bot->IsWithinLOSInMap(ally))
     {
-        if (!_clientControlled)
+        if (BotMayMove())
             HoldRangedCombatPosition(ally, HEAL_RANGE);
         return true;
     }
 
-    if (!_clientControlled)
+    if (BotMayMove() && !PlayerKeepsMove())
     {
         if (!_bot->IsStopped())
             _bot->StopMoving();
@@ -3557,7 +3708,7 @@ Unit* PlayerbotAI::SelectHealerCombatAnchor()
 
 void PlayerbotAI::HoldRangedCombatPosition(Unit* focus, float maxRange)
 {
-    if (!_bot || _clientControlled || _stay || !focus || !focus->IsAlive())
+    if (!_bot || !BotMayMove() || _stay || !focus || !focus->IsAlive())
         return;
     if (maxRange < 5.0f)
         maxRange = BOT_CAST_DIST;
@@ -3578,8 +3729,11 @@ void PlayerbotAI::HoldRangedCombatPosition(Unit* focus, float maxRange)
 
     if (dist <= maxRange && hasLos)
     {
-        BotMovement::StopAndIdle(_bot);
-        BotMovement::FaceUnit(_bot, focus);
+        if (!PlayerKeepsMove())
+        {
+            BotMovement::StopAndIdle(_bot);
+            BotMovement::FaceUnit(_bot, focus);
+        }
         _chaseGuid = focus->GetGUID();
         _followGuid = 0;
         return;
@@ -3859,7 +4013,7 @@ bool PlayerbotAI::HandlePullSequence()
 {
     if (_pullPhase == PullPhase::None || !_bot)
         return false;
-    if (_clientControlled)
+    if (_clientControlled && !_walk)
     {
         EndPullSequence(true);
         return false;
@@ -3966,7 +4120,7 @@ bool PlayerbotAI::HandlePullSequence()
 
 bool PlayerbotAI::TryAvoidAoe()
 {
-    if (!_bot || _clientControlled || _stay || !_avoidAoe)
+    if (!_bot || !BotMayMove() || _stay || !_avoidAoe)
         return false;
 
     // Ignore room-wide effects. Same cap the upstream avoid action uses.
@@ -4340,7 +4494,7 @@ bool PlayerbotAI::TryAvoidAoe()
 
 bool PlayerbotAI::WantsRangedKiting() const
 {
-    if (!_bot || _clientControlled)
+    if (!_bot || (_clientControlled && !_walk))
         return false;
 
     // Emergency: low HP always allow backing off if flee is enabled.
@@ -4390,7 +4544,7 @@ bool PlayerbotAI::WantsRangedKiting() const
 
 bool PlayerbotAI::TryCombatFlee(Unit* focus)
 {
-    if (!_bot || _clientControlled || _stay)
+    if (!_bot || (_clientControlled && !_walk) || _stay)
         return false;
     if (!sPlayerbotMgr->IsFleeEnabled())
         return false;
@@ -4425,7 +4579,7 @@ bool PlayerbotAI::TryCombatFlee(Unit* focus)
 
 bool PlayerbotAI::TryAutoMarkRti()
 {
-    if (!_bot || _clientControlled)
+    if (!_bot || (_clientControlled && !_walk))
         return false;
     if (!_bot->IsInCombat() && !GroupInCombat())
         return false;
@@ -4660,7 +4814,7 @@ Creature* PlayerbotAI::FindNearbyLoot()
 
 bool PlayerbotAI::HasNearbyLootPublic() const
 {
-    if (!_bot || !_loot || _clientControlled)
+    if (!_bot || !_loot || (_clientControlled && !_walk))
         return false;
     if (_bot->IsInCombat() || GroupInCombat())
         return false;
@@ -6471,6 +6625,7 @@ void PlayerbotAI::MoveToPosition(float x, float y, float z)
         return;
     if (BotMovement::PathCrossesSweep(_bot, x, y))
         return;
+    ClaimSelfMovement();
     _bot->GetMotionMaster()->Clear();
     _bot->GetMotionMaster()->MovePoint(1, x, y, z, true);
 }
@@ -7072,7 +7227,7 @@ bool PlayerbotAI::StrategyAllowed(bool combat, std::string const& name) const
     if (n == "savemana") n = "save mana";
     if (n == "dpsassist") n = "dps assist";
 
-    if (n == "passive" || n == "grind")
+    if (n == "passive" || n == "grind" || n == "walk")
         return true;
     if (!combat)
         return n == "food" || n == "follow" || n == "stay" || n == "loot" || n == "heal";
@@ -7159,6 +7314,13 @@ bool PlayerbotAI::HandleStrategyCommand(Player* from, std::string const& cmd, bo
     // "co:" / "nc:" (no space) so status replies never re-parse as commands.
     reply(std::string(combat ? "co:" : "nc:") + report);
     reply(std::string(combat ? "co: " : "nc: ") + FormatStrategies(combat));
+    if (_clientControlled && (report.find("+walk") != std::string::npos || report.find("-walk") != std::string::npos))
+    {
+        if (_walk)
+            reply("Walk on - I take the keys to loot, to reach the right target, and to leave bad ground. You can move whenever I am idle.");
+        else
+            reply("Walk off - you move; I only cast.");
+    }
     return true;
 }
 
@@ -7203,7 +7365,7 @@ bool PlayerbotAI::HandleChatCommand(Player* from, std::string const& text, bool 
 
     if (cmd == "help")
     {
-        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, quests all|completed|incompleted|summary, eat/drink, maintenance, autogear [reset] [match|quality|ilvl], spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Filters: @tank/@dps/@heal/@ranged.");
+        ack("Orders: stay, follow, flee, leave, summon, grind, reset, passive, aggressive, attack, tank/dps attack, pull, rti, go, position, sell, sell all, mount, mount prefer, gossip, quests, quests all|completed|incompleted|summary, eat/drink, maintenance, autogear [reset] [match|quality|ilvl], spells, debug. Strategies: co/nc +name,-name,~name or co?/nc?. Self-bot: nc +walk / co -walk (I path when I must, you move when I am idle). Filters: @tank/@dps/@heal/@ranged.");
         return true;
     }
 

@@ -22,6 +22,7 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "Opcodes.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -49,6 +50,18 @@ public:
         // the only path that did this before, so ungrouped bots stayed invisible.
         if (!player->GetSession()->IsBot() && player->IsInWorld())
             sPlayerbotMgr->SyncNearbyBotVisibility(player, diff);
+    }
+
+    // While +walk is pathing, drop client movement so WASD cannot fight the spline.
+    // Knockback acks still apply. Idle +walk leaves movement alone.
+    bool OnValidateMovement(Player* player, Unit* mover, MovementInfo const& /*movement*/, uint16 opcode) override
+    {
+        if (!player || mover != player || opcode == CMSG_MOVE_KNOCK_BACK_ACK)
+            return true;
+        PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(player);
+        if (!ai || !ai->IsSelfWalkDriving())
+            return true;
+        return false;
     }
 
     void OnLogout(Player* player) override
@@ -482,7 +495,7 @@ public:
                 handler->SetSentErrorMessage(true);
                 return false;
             }
-            handler->SendSysMessage("Self-bot AI detached. You control combat again.");
+            handler->SendSysMessage("Self-bot AI detached. You control combat and movement again.");
             return true;
         }
 
@@ -494,7 +507,7 @@ public:
                 handler->SetSentErrorMessage(true);
                 return false;
             }
-            handler->SendSysMessage("Self-bot AI attached. You move; the AI casts in combat.");
+            handler->SendSysMessage("Self-bot AI attached. You move; the AI casts in combat. Whisper yourself nc +walk to let it path when it must.");
             return true;
         }
 

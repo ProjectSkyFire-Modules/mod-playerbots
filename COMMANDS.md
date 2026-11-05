@@ -190,8 +190,9 @@ Examples:
 
 Attaches AI to your logged-in character **without** replacing the client session:
 
-- You keep WASD / jump / camera.
+- You keep WASD / jump / camera until you turn walk on.
 - AI picks combat targets and casts class filler / Wave-1 rotation spells when you are in range with LoS.
+- `nc +walk` or `co +walk` (either one; `-walk` turns it off) lets the bot path. It takes the character to loot a nearby corpse, to its combat target (tanks peel onto the mob hitting the party), and out of bad ground (`co +avoid aoe`). While it is doing none of those, you move freely. It does not follow, wander, or run off to quests. Targeting a mob out of combat does not pull; whisper `attack` (or start the fight) when you want it to engage.
 - Toggle again, or `.playerbots self off`, to detach.
 
 Useful for testing rotations and for `.playerbots init` gearing yourself.
@@ -262,7 +263,7 @@ Strategies are **role-gated** from the bot's current specialization:
 | **Tank** | `tank` (peel + hold threat), `tank assist`, `dps` (tank plays as DPS / low threat) |
 | **Healer** | `heal` (strict heal), `healer dps`, `save mana`, `wait for attack` (optional) |
 | **DPS** | `dps`, `dps assist` (party assist; default on), `threat`, `wait for attack` (default on — delay open) |
-| **All** | `passive`, `grind`, `debug` (say casts in chat) |
+| **All** | `passive`, `grind`, `walk` (self-bot movement; see below), `debug` (say casts in chat) |
 
 | Non-combat (`nc`) | Effect |
 | --- | --- |
@@ -271,6 +272,7 @@ Strategies are **role-gated** from the bot's current specialization:
 | `loot` | Loot corpses |
 | `quests` | Open-world accept/turn-in + same-map objective travel (default on for ungrouped random bots with `+grind`; cleared by `follow` pack). Grouped bots still mirror the master’s accepts into their logs while following. |
 | `passive` / `grind` | Same shared flags |
+| `walk` | Self-bot only. One switch on both `nc` and `co`: the bot paths to loot, to the right target, and out of ground hazards, then gives movement back while idle. Default off. |
 
 Chat shortcuts rewrite strategy packs like AzerothCore (not just one bool):
 
@@ -297,7 +299,25 @@ Wrong-role strategies are rejected (`!healer dps(wrong role)`) so `/p co +healer
 
 Bots always whisper their `co:` and `nc:` state back.
 
-Default on attach/init: tanks `+tank +tank assist`, healers `+heal +save mana`, DPS `+dps +dps assist +threat`, everyone `+food +follow +loot`.
+Default on attach/init: tanks `+tank +tank assist`, healers `+heal +save mana`, DPS `+dps +dps assist +threat`, everyone `+food +follow +loot`. `walk` is off.
+
+### Self-bot walk (`nc +walk` / `co +walk`)
+
+Only changes a character with `.playerbots self` on. Socket bots already move.
+
+```
+/w YourName nc +walk
+/w YourName co -walk
+```
+
+`+walk` on either `nc` or `co` turns it on for both; `-walk` turns it off. While it is on:
+
+- Out of combat the bot walks to a lootable corpse within 25 yards (needs `nc +loot`, which is already the default) and loots it.
+- In combat it walks into melee, or out to cast range, using the same target rules as a normal bot. Tanks peel a mob off a party member and run to it. Once it is in position and not dodging, you get the keys back, so a tank can still move the boss.
+- `co +avoid aoe` (default on) steps out of damaging ground effects. Tanks still sidestep the way a normal tank bot does.
+- Whisper `attack` with a mob selected to send it in. Simply selecting a mob out of combat does not.
+
+It does not follow the leader, wander, sell, or travel to quests. Those would hold the keys the whole time. `reset` or `-walk` gives movement back immediately.
 
 
 ### Party role filters

@@ -1562,7 +1562,7 @@ bool PlayerbotMgr::ToggleSelfBot(Player* player, std::string* report)
     {
         DetachSelfBot(player);
         if (report)
-            *report = "Self-bot AI detached. You control combat again.";
+            *report = "Self-bot AI detached. You control combat and movement again.";
         return true;
     }
 
@@ -1575,7 +1575,7 @@ bool PlayerbotMgr::ToggleSelfBot(Player* player, std::string* report)
     }
 
     if (report)
-        *report = "Self-bot AI attached. You move; the AI casts in combat. Use .playerbots self again to detach.";
+        *report = "Self-bot AI attached. You move; the AI casts in combat. Whisper yourself nc +walk to let it path when it must (loot, target, avoid) and give the keys back while idle. Use .playerbots self again to detach.";
     return true;
 }
 

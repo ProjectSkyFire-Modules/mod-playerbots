@@ -148,7 +148,7 @@ namespace
         }
         bool Execute() override
         {
-            if (_ai->IsClientControlled())
+            if (_ai->IsClientControlled() && !_ai->IsSelfWalkEnabled())
                 return _ai->RunCombatCastOnly();
             return _ai->RunCombat();
         }
@@ -276,7 +276,9 @@ namespace
         LootAction(PlayerbotAI* ai) : BotAction(ai, "loot") {}
         bool IsUseful() override
         {
-            if (_ai->IsClientControlled() || !_ai->HasStrategy("loot", BotState::NonCombat))
+            if (!_ai->HasStrategy("loot", BotState::NonCombat))
+                return false;
+            if (_ai->IsClientControlled() && !_ai->IsSelfWalkEnabled())
                 return false;
             Player* bot = _ai->GetBot();
             if (!bot || bot->IsInCombat() || _ai->IsGroupInCombatPublic())
@@ -499,9 +501,9 @@ bool BotAiEngine::DoNextAction()
     ProcessTriggers();
     PushDefaultActions();
 
-    // Self-bot: only combat + rest (client owns movement). Skip rest entirely
-    // while combat is active so low mana mid-fight never queues a drink.
-    if (_ai->IsClientControlled())
+    // Cast-only self-bot: combat + rest. +walk uses the normal queue so loot
+    // and combat positioning run; follow/wander stay impossible (IsUseful).
+    if (_ai->IsClientControlled() && !_ai->IsSelfWalkEnabled())
     {
         _queue.Clear();
         _queue.Push("combat", BotRelevance::Combat);

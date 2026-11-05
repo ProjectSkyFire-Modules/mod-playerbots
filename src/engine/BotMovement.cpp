@@ -4,6 +4,9 @@
 
 #include "BotMovement.h"
 
+#include "PlayerbotAI.h"
+#include "PlayerbotMgr.h"
+
 #include "CellImpl.h"
 #include "GameObject.h"
 #include "GameObjectModel.h"
@@ -37,6 +40,14 @@ bool IsCasting(Player* bot)
     // state alone — that stuck true and blocked facing / move-flag cleanup.
     return bot && bot->IsNonMeleeSpellCasted(false, false, true, false, false);
 }
+
+    void ClaimSelfWalk(Player* bot)
+    {
+        if (!bot)
+            return;
+        if (PlayerbotAI* ai = sPlayerbotMgr->GetBotAI(bot))
+            ai->ClaimSelfMovement();
+    }
 
     bool CanMove(Player* bot)
     {
@@ -355,6 +366,7 @@ bool IsCasting(Player* bot)
         if (PathCrossesSweep(bot, leader->GetPositionX(), leader->GetPositionY()))
             return false;
         EnsureRunning(bot);
+        ClaimSelfWalk(bot);
         bot->GetMotionMaster()->Clear();
         bot->GetMotionMaster()->MoveFollow(leader, distance, angle);
         return true;
@@ -369,6 +381,7 @@ bool IsCasting(Player* bot)
         if (PathCrossesSweep(bot, target->GetPositionX(), target->GetPositionY()))
             return false;
         EnsureRunning(bot);
+        ClaimSelfWalk(bot);
         bot->GetMotionMaster()->Clear();
         bot->GetMotionMaster()->MoveChase(target, distance);
         return true;
@@ -383,6 +396,7 @@ bool IsCasting(Player* bot)
         if (checkSweep && PathCrossesSweep(bot, x, y))
             return false;
         EnsureRunning(bot);
+        ClaimSelfWalk(bot);
         bot->GetMotionMaster()->Clear();
         bot->GetMotionMaster()->MovePoint(0, x, y, z, generatePath);
         return true;
@@ -415,6 +429,7 @@ bool IsCasting(Player* bot)
         if (PathCrossesSweep(bot, destX, destY))
             return false;
 
+        ClaimSelfWalk(bot);
         bot->GetMotionMaster()->Clear();
         bot->GetMotionMaster()->MovePoint(1, destX, destY, destZ, true);
         return true;
