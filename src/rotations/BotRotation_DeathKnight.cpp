@@ -189,6 +189,9 @@ uint32 SelectUnholy(Context const& ctx)
         return SCOURGE_STRIKE;
     if (CanTryCast(bot, FESTERING_STRIKE))
         return FESTERING_STRIKE;
+    // Scourge Strike is level 58: Plague Strike spends the Unholy runes until then.
+    if (!bot->HasSpell(SCOURGE_STRIKE) && CanTryCast(bot, PLAGUE_STRIKE))
+        return PLAGUE_STRIKE;
 
     // Also feeds Shadow Infusion toward the next Dark Transformation.
     if (CanTryCast(bot, DEATH_COIL))
@@ -277,6 +280,9 @@ uint32 SelectFrostDK(Context const& ctx)
             return HOWLING_BLAST;
     }
 
+    // Obliterate is level 58: Plague Strike spends the Unholy runes until then.
+    if (!bot->HasSpell(OBLITERATE) && CanTryCast(bot, PLAGUE_STRIKE))
+        return PLAGUE_STRIKE;
     if (CanTryCast(bot, FROST_STRIKE))
         return FROST_STRIKE;
     if (CanTryCast(bot, HORN_OF_WINTER))
@@ -346,6 +352,14 @@ uint32 SelectBlood(Context const& ctx)
         return HEART_STRIKE;
     if (CanTryCast(bot, DEATH_STRIKE))
         return DEATH_STRIKE;
+    // Heart Strike is level 60 and Death Strike 56: spend the runes on what is known.
+    if (!bot->HasSpell(HEART_STRIKE))
+    {
+        if (diseases && CanTryCast(bot, BLOOD_BOIL))
+            return BLOOD_BOIL;
+        if (!bot->HasSpell(DEATH_STRIKE) && CanTryCast(bot, PLAGUE_STRIKE))
+            return PLAGUE_STRIKE;
+    }
 
     if (runic >= 60)
     {

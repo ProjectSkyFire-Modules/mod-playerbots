@@ -245,4 +245,38 @@ uint32 SelectBalance(Context const& ctx)
     return 0;
 }
 
+uint32 SelectLowLevelDruid(Context const& ctx)
+{
+    Player* bot = ctx.bot;
+    Unit* target = ctx.target;
+    if (!bot || !target)
+        return 0;
+
+    bool const cat = bot->GetShapeshiftForm() == FORM_CAT;
+    float const dist = bot->GetDistance(target);
+
+    // Open from range; Cat Form (level 6) once the target closes in.
+    if (cat && !bot->IsInCombat() && dist > 10.0f)
+    {
+        bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+        return SelectBalance(ctx);
+    }
+    if (!cat)
+    {
+        if ((bot->IsWithinMeleeRange(target) || dist <= 8.0f) && ReadyToShapeshift(bot, CAT_FORM))
+            return CAT_FORM;
+        return SelectBalance(ctx);
+    }
+
+    int8 const cp = ctx.comboPoints;
+    if ((cp >= 5 || (cp >= 1 && ctx.targetHealthPct <= 25.0f)) && CanTryCast(bot, FEROCIOUS_BITE))
+        return FEROCIOUS_BITE;
+    if (NeedsMyAuraRefresh(bot, target, RAKE, 3.0f) && CanTryCast(bot, RAKE))
+        return RAKE;
+    if (CanTryCast(bot, MANGLE_CAT))
+        return MANGLE_CAT;
+
+    return 0;
+}
+
 } // namespace BotRotation

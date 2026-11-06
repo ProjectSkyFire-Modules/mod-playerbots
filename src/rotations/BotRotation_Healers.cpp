@@ -95,6 +95,9 @@ uint32 SelectHolyPaladin(HealContext const& ctx)
         return HOLY_SHOCK;
     if (big && AllowExpensiveHeal(ctx) && CanTryCast(bot, HOLY_LIGHT))
         return HOLY_LIGHT;
+    // Holy Light is level 34.
+    if (big && !bot->HasSpell(HOLY_LIGHT) && AllowExpensiveHeal(ctx) && CanTryCast(bot, FLASH_OF_LIGHT))
+        return FLASH_OF_LIGHT;
 
     return 0;
 }
@@ -113,6 +116,7 @@ uint32 SelectDiscipline(HealContext const& ctx)
         POWER_WORD_SHIELD   = 17,
         PENANCE             = 47540,
         FLASH_HEAL          = 2061,
+        HEAL                = 2050,
         GREATER_HEAL        = 2060,
         PRAYER_OF_MENDING   = 33076,
         RENEW               = 139,
@@ -146,6 +150,14 @@ uint32 SelectDiscipline(HealContext const& ctx)
     // Greater Heal only when someone is actually hurt — never as a top-off.
     if (big && AllowExpensiveHeal(ctx) && CanTryCast(bot, GREATER_HEAL))
         return GREATER_HEAL;
+    // Greater Heal is level 34 and Heal 28.
+    if (big && !bot->HasSpell(GREATER_HEAL) && AllowExpensiveHeal(ctx))
+    {
+        if (CanTryCast(bot, HEAL))
+            return HEAL;
+        if (CanTryCast(bot, FLASH_HEAL))
+            return FLASH_HEAL;
+    }
     if (NeedsMaintenance(ctx) && !HasAuraUp(ally, RENEW) && CanTryCast(bot, RENEW))
         return RENEW;
 
@@ -167,7 +179,8 @@ uint32 SelectHolyPriest(HealContext const& ctx)
         RENEW               = 139,
         PRAYER_OF_MENDING   = 33076,
         FLASH_HEAL          = 2061,
-        HEAL                = 2060,
+        HEAL                = 2050,
+        GREATER_HEAL        = 2060,
         CIRCLE_OF_HEALING   = 34861,
         PRAYER_OF_HEALING   = 596,
         GUARDIAN_SPIRIT     = 47788,
@@ -205,9 +218,16 @@ uint32 SelectHolyPriest(HealContext const& ctx)
         return FLASH_HEAL;
     if (urgent && CanTryCast(bot, BINDING_HEAL))
         return BINDING_HEAL;
-    // Efficient Heal is still a direct heal — gate below 65% like Greater.
-    if (big && AllowExpensiveHeal(ctx) && CanTryCast(bot, HEAL))
-        return HEAL;
+    if (big && AllowExpensiveHeal(ctx) && CanTryCast(bot, GREATER_HEAL))
+        return GREATER_HEAL;
+    // Greater Heal is level 34 and Heal 28.
+    if (big && !bot->HasSpell(GREATER_HEAL) && AllowExpensiveHeal(ctx))
+    {
+        if (CanTryCast(bot, HEAL))
+            return HEAL;
+        if (CanTryCast(bot, FLASH_HEAL))
+            return FLASH_HEAL;
+    }
 
     return 0;
 }
@@ -257,6 +277,14 @@ uint32 SelectRestorationShaman(HealContext const& ctx)
         return HEALING_SURGE;
     if (big && AllowExpensiveHeal(ctx) && CanTryCast(bot, GREATER_HEALING_WAVE))
         return GREATER_HEALING_WAVE;
+    // Greater Healing Wave is level 60 and Healing Wave 20.
+    if (big && !bot->HasSpell(GREATER_HEALING_WAVE) && AllowExpensiveHeal(ctx))
+    {
+        if (CanTryCast(bot, HEALING_WAVE))
+            return HEALING_WAVE;
+        if (CanTryCast(bot, HEALING_SURGE))
+            return HEALING_SURGE;
+    }
 
     if (NeedsMaintenance(ctx)
         && (!HasAuraUp(ally, RIPTIDE) || AuraRemains(ally, RIPTIDE) <= 3.0f)
@@ -336,6 +364,9 @@ uint32 SelectRestorationDruid(HealContext const& ctx)
         return REGROWTH;
     if (big && AllowExpensiveHeal(ctx) && CanTryCast(bot, HEALING_TOUCH))
         return HEALING_TOUCH;
+    // Healing Touch is level 26.
+    if (big && !bot->HasSpell(HEALING_TOUCH) && AllowExpensiveHeal(ctx) && CanTryCast(bot, REGROWTH))
+        return REGROWTH;
     if (NeedsMaintenance(ctx) && !HasAuraUp(ally, REJUVENATION) && CanTryCast(bot, REJUVENATION))
         return REJUVENATION;
 

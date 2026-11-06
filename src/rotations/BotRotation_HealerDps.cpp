@@ -18,6 +18,7 @@ uint32 SelectHolyPaladinDps(Context const& ctx)
     {
         SEAL_OF_TRUTH       = 31801,
         SEAL_OF_RIGHTEOUSNESS = 20154,
+        SEAL_OF_COMMAND     = 105361, // level 3 until the other seals
         JUDGMENT            = 20271,
         CRUSADER_STRIKE     = 35395,
         EXORCISM            = 879,
@@ -42,6 +43,8 @@ uint32 SelectHolyPaladinDps(Context const& ctx)
             return SEAL_OF_RIGHTEOUSNESS;
         if (CanTryCast(bot, 20165)) // Seal of Insight
             return 20165;
+        if (!HasAuraUp(bot, SEAL_OF_COMMAND) && CanTryCast(bot, SEAL_OF_COMMAND))
+            return SEAL_OF_COMMAND;
     }
 
     if (WantsCooldowns(ctx) && CanTryCast(bot, AVENGING_WRATH))

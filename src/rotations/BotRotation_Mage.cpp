@@ -160,6 +160,8 @@ uint32 SelectArcane(Context const& ctx)
     // Low level: Missiles procs before Arcane Blast is learned.
     if (missiles && CanTryCast(bot, ARCANE_MISSILES))
         return ARCANE_MISSILES;
+    if (!bot->HasSpell(ARCANE_BLAST) && CanTryCast(bot, FROSTFIRE_BOLT))
+        return FROSTFIRE_BOLT;
 
     return 0;
 }
@@ -200,6 +202,14 @@ uint32 SelectFire(Context const& ctx)
 
     if (CanTryCast(bot, FIREBALL))
         return FIREBALL;
+    // Fireball is level 12; Fire Blast and Frostfire Bolt cover 10-11.
+    if (!bot->HasSpell(FIREBALL))
+    {
+        if (CanTryCast(bot, FIRE_BLAST))
+            return FIRE_BLAST;
+        if (CanTryCast(bot, FROSTFIRE_BOLT))
+            return FROSTFIRE_BOLT;
+    }
 
     return 0;
 }
@@ -263,6 +273,9 @@ uint32 SelectFrostMage(Context const& ctx)
         return FIRE_BLAST;
     if (CanTryCast(bot, FROSTBOLT))
         return FROSTBOLT;
+    // Frostbolt is level 12; Frostfire Bolt is the level 1 nuke.
+    if (!bot->HasSpell(FROSTBOLT) && CanTryCast(bot, FROSTFIRE_BOLT))
+        return FROSTFIRE_BOLT;
 
     return 0;
 }

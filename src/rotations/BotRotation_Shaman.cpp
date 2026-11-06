@@ -42,6 +42,7 @@ namespace
         WINDFURY_WEAPON      = 8232,
         FLAMETONGUE_WEAPON   = 8024,
         STORMSTRIKE          = 17364,
+        PRIMAL_STRIKE        = 73899,  // level 3 until Stormstrike (26)
         LAVA_LASH            = 60103,
         MAELSTROM_WEAPON     = 53817,
         FERAL_SPIRIT         = 51533,
@@ -204,6 +205,8 @@ uint32 SelectEnhancement(Context const& ctx)
         return LIGHTNING_BOLT;
     if (CanTryCast(bot, STORMSTRIKE))
         return STORMSTRIKE;
+    if (!bot->HasSpell(STORMSTRIKE) && CanTryCast(bot, PRIMAL_STRIKE))
+        return PRIMAL_STRIKE;
     if (CanTryCast(bot, LAVA_LASH))
         return LAVA_LASH;
     if ((HasAuraUp(bot, UNLEASH_FLAME) || !flameShockUp) && CanTryCast(bot, FLAME_SHOCK))

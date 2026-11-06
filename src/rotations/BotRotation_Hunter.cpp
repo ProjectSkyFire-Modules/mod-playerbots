@@ -46,6 +46,7 @@ namespace
         AIMED_SHOT        = 19434,
         MASTER_MARKSMAN   = 82926,  // "Fire!": next Aimed Shot is instant and free
         STEADY_FOCUS      = 53220,
+        CAREFUL_AIM       = 34483,  // level 20: Aimed / Steady crit above 80% health
 
         // Survival
         BLACK_ARROW       = 3674,
@@ -176,10 +177,17 @@ uint32 SelectMarksmanship(Context const& ctx)
         return SERPENT_STING;
     if (HasAuraUp(bot, MASTER_MARKSMAN) && CanTryCast(bot, AIMED_SHOT))
         return AIMED_SHOT;
+    // Hard-cast Aimed Shot inside Careful Aim or Rapid Fire.
+    bool const carefulAim = ctx.targetHealthPct > 80.0f && bot->HasSpell(CAREFUL_AIM);
+    if (focus >= 50 && (carefulAim || HasAuraUp(bot, RAPID_FIRE)) && CanTryCast(bot, AIMED_SHOT))
+        return AIMED_SHOT;
     if (ctx.enemies >= 4 && CanTryCast(bot, MULTI_SHOT))
         return MULTI_SHOT;
     if (ctx.targetHealthPct <= 20.0f && CanTryCast(bot, KILL_SHOT))
         return KILL_SHOT;
+    // Before Chimera Shot (60) Aimed Shot is the focus dump, not Arcane Shot.
+    if (!bot->HasSpell(CHIMERA_SHOT) && focus >= 60 && CanTryCast(bot, AIMED_SHOT))
+        return AIMED_SHOT;
     if ((HasAuraUp(bot, THRILL_OF_THE_HUNT) || focus >= 60) && CanTryCast(bot, ARCANE_SHOT))
         return ARCANE_SHOT;
     if (CanTryCast(bot, STEADY_SHOT))

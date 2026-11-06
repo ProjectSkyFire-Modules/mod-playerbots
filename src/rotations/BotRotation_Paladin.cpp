@@ -14,6 +14,7 @@ namespace
     enum PalaSpells : uint32
     {
         SEAL_OF_TRUTH           = 31801,
+        SEAL_OF_COMMAND         = 105361, // level 3 until Seal of Truth (24)
         INQUISITION             = 84963,
         TEMPLARS_VERDICT        = 85256,
         CRUSADER_STRIKE         = 35395,
@@ -68,6 +69,8 @@ uint32 SelectRetribution(Context const& ctx)
     if (!HasAuraUp(bot, SEAL_OF_TRUTH) && !HasAuraUp(bot, SEAL_OF_RIGHTEOUSNESS)
         && CanTryCast(bot, SEAL_OF_TRUTH))
         return SEAL_OF_TRUTH;
+    if (!bot->HasSpell(SEAL_OF_TRUTH) && !HasAuraUp(bot, SEAL_OF_COMMAND) && CanTryCast(bot, SEAL_OF_COMMAND))
+        return SEAL_OF_COMMAND;
 
     if (NeedsMyAuraRefresh(bot, bot, INQUISITION, 2.0f) && (hp >= 3 || divinePurpose)
         && CanTryCast(bot, INQUISITION))
@@ -151,6 +154,14 @@ uint32 SelectProtectionPaladin(Context const& ctx)
         return RIGHTEOUS_FURY;
     if (!HasAuraUp(bot, SEAL_OF_INSIGHT) && CanTryCast(bot, SEAL_OF_INSIGHT))
         return SEAL_OF_INSIGHT;
+    // Seal of Insight is level 32: Truth (24) or Command (3) until then.
+    if (!bot->HasSpell(SEAL_OF_INSIGHT) && !HasAuraUp(bot, SEAL_OF_TRUTH) && !HasAuraUp(bot, SEAL_OF_COMMAND))
+    {
+        if (CanTryCast(bot, SEAL_OF_TRUTH))
+            return SEAL_OF_TRUTH;
+        if (!bot->HasSpell(SEAL_OF_TRUTH) && CanTryCast(bot, SEAL_OF_COMMAND))
+            return SEAL_OF_COMMAND;
+    }
 
     // Mitigation (Shield of the Righteous is off the GCD).
     if ((hp >= 3 || divinePurpose) && CanTryCast(bot, SHIELD_OF_THE_RIGHTEOUS))

@@ -79,6 +79,7 @@ namespace
             case 84963:  // Inquisition
             case 31801:  // Seal of Truth
             case 20154:  // Seal of Righteousness
+            case 105361: // Seal of Command
             case 15473:  // Shadowform
             case 15286:  // Vampiric Embrace
             case 21562:  // Power Word: Fortitude
@@ -247,6 +248,26 @@ namespace
                 return true;
             default:
                 return IsSelfCast(spellId);
+        }
+    }
+
+    // Druid form abilities are cast by their form id, but only the shared base spell is
+    // learned: the client swaps the action-bar button, which socketless bots never send.
+    uint32 LearnedSpellFor(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 33876:  // Mangle (Cat)
+            case 33878:  // Mangle (Bear)
+                return 33917;
+            case 106830: // Thrash (Cat)
+            case 77758:  // Thrash (Bear)
+                return 106832;
+            case 62078:  // Swipe (Cat)
+            case 779:    // Swipe (Bear)
+                return 106785;
+            default:
+                return spellId;
         }
     }
 
@@ -514,7 +535,7 @@ bool SpellReady(Player* bot, uint32 spellId)
 {
     if (!bot || !spellId)
         return false;
-    if (!bot->HasSpell(spellId))
+    if (!bot->HasSpell(spellId) && !bot->HasSpell(LearnedSpellFor(spellId)))
         return false;
     if (bot->HasSpellCooldown(spellId))
         return false;
@@ -1236,6 +1257,20 @@ namespace
         return false;
     }
 
+    // Aspect of the Hawk (12), or the Iron Hawk talent (45) that replaces it.
+    bool TryHunterAspect(Player* bot)
+    {
+        enum : uint32 { ASPECT_OF_THE_HAWK = 13165, ASPECT_OF_THE_IRON_HAWK = 109260 };
+
+        if (bot->IsMounted() || HasAuraUp(bot, ASPECT_OF_THE_IRON_HAWK))
+            return false;
+        if (TryCastBuff(bot, ASPECT_OF_THE_IRON_HAWK))
+            return true;
+        if (bot->HasSpell(ASPECT_OF_THE_IRON_HAWK) || HasAuraUp(bot, ASPECT_OF_THE_HAWK))
+            return false;
+        return TryCastBuff(bot, ASPECT_OF_THE_HAWK);
+    }
+
     // Grimoire of Sacrifice needs a demon out, and a sacrificed Felhunter grants Spell Lock.
     bool TryWarlockPet(Player* bot)
     {
@@ -1548,6 +1583,8 @@ bool TryMaintainBuffs(Player* bot)
             break;
         case CLASS_HUNTER:
             if (TryHunterPet(bot))
+                return true;
+            if (TryHunterAspect(bot))
                 return true;
             break;
         case CLASS_WARLOCK:
@@ -1961,10 +1998,23 @@ uint32 SelectNextSpell(Player* bot, Unit* target)
         case SPEC_DRUID_RESTORATION:     return SelectRestorationDruidDps(ctx);
         case SPEC_MONK_MISTWEAVER:       return SelectMistweaverDps(ctx);
         default:
-            // Low-level / unset spec: still run the class rotation.
-            if (bot->getClass() == CLASS_HUNTER)
-                return SelectBeastMastery(ctx);
-            return 0;
+            // No specialization before level 10: run the class line that only needs
+            // baseline spells (spec spells are skipped by CanTryCast).
+            switch (bot->getClass())
+            {
+                case CLASS_WARRIOR:      return SelectArms(ctx);
+                case CLASS_PALADIN:      return SelectRetribution(ctx);
+                case CLASS_HUNTER:       return SelectBeastMastery(ctx);
+                case CLASS_ROGUE:        return SelectCombat(ctx);
+                case CLASS_PRIEST:       return SelectShadow(ctx);
+                case CLASS_DEATH_KNIGHT: return SelectFrostDK(ctx);
+                case CLASS_SHAMAN:       return SelectElemental(ctx);
+                case CLASS_MAGE:         return SelectFrostMage(ctx);
+                case CLASS_WARLOCK:      return SelectAffliction(ctx);
+                case CLASS_MONK:         return SelectWindwalker(ctx);
+                case CLASS_DRUID:        return SelectLowLevelDruid(ctx);
+                default:                 return 0;
+            }
     }
 }
 

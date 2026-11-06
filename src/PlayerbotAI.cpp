@@ -2454,10 +2454,14 @@ bool PlayerbotAI::IsRangedClass() const
         case CLASS_WARLOCK:
             return true;
         case CLASS_SHAMAN:
-            // Elemental = tab 0; Enhancement/Resto melee for now.
-            return isSpec(0);
+            // Elemental = tab 0; Enhancement/Resto melee for now. No spec before
+            // level 10: Lightning Bolt / Earth Shock from range.
+            return specId == 0 || isSpec(0);
         case CLASS_DRUID:
-            // Balance = tab 0.
+            // Balance = tab 0. No spec before level 10: Wrath / Moonfire from range,
+            // then melee once the rotation has shifted to Cat Form in the fight.
+            if (specId == 0)
+                return _bot->GetShapeshiftForm() != FORM_CAT || !_bot->IsInCombat();
             return isSpec(0);
         default:
             return false;
@@ -2648,9 +2652,18 @@ uint32 PlayerbotAI::GetFillerSpell() const
             return 1752;       // Sinister Strike
         }
         case CLASS_PRIEST:  return 585;   // Smite
-        case CLASS_MAGE:    return 116;   // Frostbolt
+        case CLASS_MAGE:
+            // Frostbolt / Fireball / Arcane Blast come with the spec at 10-12.
+            if (_bot->HasSpell(116))
+                return 116;   // Frostbolt
+            if (_bot->HasSpell(133))
+                return 133;   // Fireball
+            if (_bot->HasSpell(30451))
+                return 30451; // Arcane Blast
+            return 44614;     // Frostfire Bolt
         case CLASS_WARLOCK: return 686;   // Shadow Bolt
         case CLASS_SHAMAN:  return 403;   // Lightning Bolt (ranged) / melee still auto-attacks
+        case CLASS_DRUID:   return 5176;  // Wrath
         case CLASS_MONK:    return 100780; // Jab
         case CLASS_WARRIOR:
             if (_bot->HasSpell(23922) && BotRotation::HasShieldEquipped(_bot))
@@ -3881,12 +3894,18 @@ uint32 PlayerbotAI::GetHealSpell() const
                 return 20473; // Holy Shock
             if (big && BotRotation::SpellReady(_bot, 635))
                 return 635; // Holy Light
+            if (big && BotRotation::SpellReady(_bot, 19750))
+                return 19750; // Flash of Light (before Holy Light)
             return 0;
         case CLASS_PRIEST:
             if (urgent && BotRotation::SpellReady(_bot, 2061))
                 return 2061; // Flash Heal
             if (big && BotRotation::SpellReady(_bot, 2060))
-                return 2060; // Heal / Greater Heal
+                return 2060; // Greater Heal
+            if (big && BotRotation::SpellReady(_bot, 2050))
+                return 2050; // Heal
+            if (big && BotRotation::SpellReady(_bot, 2061))
+                return 2061; // Flash Heal (before Heal)
             if (BotRotation::SpellReady(_bot, 139))
                 return 139; // Renew
             return 0;
@@ -3897,6 +3916,8 @@ uint32 PlayerbotAI::GetHealSpell() const
                 return 77472; // Greater Healing Wave
             if (topOff && BotRotation::SpellReady(_bot, 331))
                 return 331; // Healing Wave
+            if (big && BotRotation::SpellReady(_bot, 8004))
+                return 8004; // Healing Surge (before Healing Wave)
             return 0;
         case CLASS_DRUID:
             if (urgent && BotRotation::SpellReady(_bot, 8936))

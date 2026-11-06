@@ -32,6 +32,7 @@ namespace BotRotation
 
     // Wave 3 - remaining DPS + tanks
     uint32 SelectBalance(Context const& ctx);
+    uint32 SelectLowLevelDruid(Context const& ctx);
     uint32 SelectGuardian(Context const& ctx);
     uint32 SelectFire(Context const& ctx);
     uint32 SelectArcane(Context const& ctx);
