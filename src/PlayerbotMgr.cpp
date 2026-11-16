@@ -46,6 +46,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 PlayerbotMgr* PlayerbotMgr::instance()
@@ -245,6 +246,9 @@ void PlayerbotMgr::LoadConfig()
     if (_saveManaThreshold > 100.0f) _saveManaThreshold = 100.0f;
     if (_waitForAttackSeconds > 30) _waitForAttackSeconds = 30;
 
+    // Rebuild at the world update barrier, never inside a map-worker callback.
+    _questSpawnsReloadPending = true;
+
     // Force a candidate reload so prefix changes take effect on .reload config.
     _candidatesLoaded = false;
 
@@ -257,10 +261,47 @@ void PlayerbotMgr::LoadConfig()
         SF_LOG_INFO("modules", "[mod-playerbots] Disabled via configuration.");
 }
 
+void PlayerbotMgr::LoadQuestSpawns()
+{
+    _questSpawnsReloadPending = false;
+    // Two bulk reads per startup/reload replace per-bot synchronous queries.
+    // Build both tables before publishing, retaining the previous snapshot if
+    // either read fails (or a spawn table is unexpectedly empty).
+    QueryResult creatures = WorldDatabase.Query(
+        "SELECT map, id, position_x, position_y, position_z FROM creature ORDER BY guid");
+    QueryResult objects = WorldDatabase.Query(
+        "SELECT map, id, position_x, position_y, position_z FROM gameobject ORDER BY guid");
+    if (!creatures || !objects)
+    {
+        SF_LOG_ERROR("modules", "[mod-playerbots] Quest spawn index not replaced: spawn read failed or table empty. Retry with .playerbots reload.");
+        return;
+    }
+
+    BotQuestSpawns next;
+    uint32 count = 0;
+    auto load = [&next, &count](QueryResult& rows, bool gameObject)
+    {
+        do
+        {
+            Field* fields = rows->Fetch();
+            next.Add(gameObject, fields[0].GetUInt32(), fields[1].GetUInt32(),
+                { fields[2].GetFloat(), fields[3].GetFloat(), fields[4].GetFloat() });
+            ++count;
+        } while (rows->NextRow());
+    };
+    load(creatures, false);
+    load(objects, true);
+    _questSpawns = std::move(next);
+    SF_LOG_INFO("modules", "[mod-playerbots] Indexed %u quest travel spawn positions; AI lookups require no SQL.", count);
+}
+
 void PlayerbotMgr::Update(uint32 diff)
 {
     if (!_enabled)
         return;
+
+    if (_questSpawnsReloadPending)
+        LoadQuestSpawns();
 
     // OnWorldUpdate runs after MapManager's update barrier. Map workers read
     // this snapshot next tick; never modify it from a player/map callback.

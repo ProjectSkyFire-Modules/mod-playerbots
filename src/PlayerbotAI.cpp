@@ -19,7 +19,6 @@
 #include "CellImpl.h"
 #include "Chat.h"
 #include "Creature.h"
-#include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "DynamicObject.h"
 #include "GameObject.h"
@@ -6562,44 +6561,21 @@ bool PlayerbotAI::TravelToQuestObjective()
             if (have >= uint16(obj->Amount > 0 ? obj->Amount : 1))
                 continue;
 
-            // Nearest same-map spawn for this objective entry.
-            QueryResult result = WorldDatabase.PQuery(
-                "SELECT position_x, position_y, position_z FROM creature WHERE id = %u AND map = %u LIMIT 8",
-                obj->ObjectId, _bot->GetMapId());
-            if (!result && obj->Type == QUEST_OBJECTIVE_TYPE_GO)
-                result = WorldDatabase.PQuery(
-                    "SELECT position_x, position_y, position_z FROM gameobject WHERE id = %u AND map = %u LIMIT 8",
-                    obj->ObjectId, _bot->GetMapId());
-            if (!result)
-                continue;
-
-            float bestX = 0, bestY = 0, bestZ = 0;
+            // Immutable shared index: misses also avoid SQL and connection locks.
+            // Creature and game-object entry IDs occupy separate namespaces.
+            BotQuestSpawns::Position nearest;
             float bestD2 = -1.0f;
-            do
-            {
-                Field* f = result->Fetch();
-                float const x = f[0].GetFloat();
-                float const y = f[1].GetFloat();
-                float const z = f[2].GetFloat();
-                float const dx = x - _bot->GetPositionX();
-                float const dy = y - _bot->GetPositionY();
-                float const dz = z - _bot->GetPositionZ();
-                float const d2 = dx * dx + dy * dy + dz * dz;
-                if (bestD2 < 0.0f || d2 < bestD2)
-                {
-                    bestD2 = d2;
-                    bestX = x;
-                    bestY = y;
-                    bestZ = z;
-                }
-            } while (result->NextRow());
+            if (!sPlayerbotMgr->GetQuestSpawns().Nearest(obj->Type == QUEST_OBJECTIVE_TYPE_GO,
+                _bot->GetMapId(), obj->ObjectId,
+                { _bot->GetPositionX(), _bot->GetPositionY(), _bot->GetPositionZ() }, nearest, bestD2))
+                continue;
 
             if (bestD2 >= 0.0f)
             {
                 // Already in the hunt area — let combat/wander search locally.
                 if (bestD2 <= BOT_QUEST_HUNT_RADIUS * BOT_QUEST_HUNT_RADIUS)
                     return false;
-                return SetTravelDestination(_bot->GetMapId(), bestX, bestY, bestZ);
+                return SetTravelDestination(_bot->GetMapId(), nearest.x, nearest.y, nearest.z);
             }
         }
     }

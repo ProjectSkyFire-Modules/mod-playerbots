@@ -14,6 +14,7 @@
 #define _SF_PLAYERBOT_MGR_H
 
 #include "Define.h"
+#include "BotQuestSpawns.h"
 #include <deque>
 #include <string>
 #include <unordered_map>
@@ -32,6 +33,10 @@ public:
 
     // (Re)reads module settings from the worldserver configuration.
     void LoadConfig();
+
+    // Startup or world-thread barrier only; never called from map workers.
+    void LoadQuestSpawns();
+    BotQuestSpawns const& GetQuestSpawns() const { return _questSpawns; }
 
     // Called every world tick (from the module's WorldScript::OnUpdate).
     void Update(uint32 diff);
@@ -390,6 +395,8 @@ private:
     // Role/spec remembered at create when InitOnCreate=0; applied on first login.
     std::unordered_map<uint64, PendingBotInit> _deferredInits;
 
+    BotQuestSpawns _questSpawns;
+    bool _questSpawnsReloadPending = true;
     std::vector<uint64> _realPlayerGuids;
     std::unordered_map<uint64 /*characterGuid*/, WorldSession*> _bots;
     std::unordered_map<uint64 /*characterGuid*/, PlayerbotAI*> _ai;

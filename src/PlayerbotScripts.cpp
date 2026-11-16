@@ -218,6 +218,7 @@ public:
             SF_LOG_INFO("modules", "[mod-playerbots] %s", report.c_str());
         }
 
+        sPlayerbotMgr->LoadQuestSpawns();
         sBotVendorHubs->Load();
         sBotPreferredMounts->Load();
     }

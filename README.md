@@ -137,6 +137,30 @@ Preferred mounts: the table is also created at runtime with
 `CREATE TABLE IF NOT EXISTS` on module load, so a fresh characters DB will not
 error. Keep the SQL file for tooling, backups, and manual apply.
 
+## Quest travel spawn index
+
+Quest travel loads creature and game-object spawn coordinates into a shared
+in-memory index at startup. AI lookups, including missing entries, require no
+SQL or connection-pool locks. Creature and game-object IDs are separate; travel
+selects the nearest same-map spawn from all positions instead of the first eight.
+
+After changing spawn coordinates, run `.playerbots reload`. The index rebuilds
+on the world thread after map workers finish. Its two bulk reads can briefly
+delay that update; avoid repeated reloads during load tests. If either read fails
+or its table is empty, the previous snapshot is retained and an error is logged.
+On initial failure, long-distance objective travel remains unavailable until a
+successful reload; nearby objective handling continues. AI never falls back to SQL.
+
+This is a static travel hint, not a live phase/respawn-state index. No schema or
+configuration changes are required.
+
+Standalone regression test:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -pthread tests/BotQuestSpawnsTests.cpp -o /tmp/bot-quest-spawns-test
+/tmp/bot-quest-spawns-test
+```
+
 ## Why this is a port, not a drop-in
 
 The upstream module targets AzerothCore, which is WotLK (3.3.5a). SkyFire is
