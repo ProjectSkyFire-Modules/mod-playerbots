@@ -2166,7 +2166,8 @@ namespace
         uint32 const level    = bot->getLevel();
         uint32 const classBit = 1u << (bot->getClass() - 1);
         uint32 const raceBit  = 1u << (bot->getRace() - 1);
-        uint32 const minReq   = level > 10 ? (level - 10) : 1;
+        // Starter equipment can have RequiredLevel=0.
+        uint32 const minReq   = level > 10 ? (level - 10) : 0;
         int qualityCap = std::max(0, std::min(maxQuality, int(ITEM_QUALITY_LEGENDARY)));
         int qualityMin = std::max(0, std::min(minQuality, qualityCap));
 
@@ -2750,16 +2751,36 @@ namespace
     }
 
     // Equips a fresh copy of the item into whichever slot the core picks.
-    bool EquipItemEntry(Player* bot, uint32 entry)
+    bool EquipItemEntry(Player* bot, uint32 entry, uint8 slot)
     {
         if (!entry)
             return false;
 
         uint16 dest = 0;
-        if (bot->CanEquipNewItem(NULL_SLOT, dest, entry, false) != EQUIP_ERR_OK)
+        if (bot->CanEquipNewItem(slot, dest, entry, true) != EQUIP_ERR_OK)
             return false;
 
-        return bot->EquipNewItem(dest, entry, true) != nullptr;
+        Item* worn = bot->GetItemByPos(dest);
+        if (!worn)
+            return bot->EquipNewItem(dest, entry, true) != nullptr;
+        if (worn->GetEntry() == entry)
+            return true;
+
+        // Stage the replacement in inventory, then let the core validate and
+        // swap both items. A full bag or failed swap leaves worn gear intact.
+        ItemPosCountVec storage;
+        if (bot->CanStoreNewItem(NULL_BAG, NULL_SLOT, storage, entry, 1) != EQUIP_ERR_OK)
+            return false;
+        Item* replacement = bot->StoreNewItem(storage, entry, true);
+        if (!replacement)
+            return false;
+        uint16 const source = replacement->GetPos();
+        bot->SwapItem(source, dest);
+        if (bot->GetItemByPos(dest) == replacement)
+            return true;
+        if (bot->GetItemByPos(source) == replacement)
+            bot->DestroyItem(replacement->GetBagSlot(), replacement->GetSlot(), true);
+        return false;
     }
 
     // Autogear's upgrade yardstick: the spec's weighted stats (BotEnchants::
@@ -2940,23 +2961,10 @@ namespace
             }
 
             for (uint32 entry : entries)
-                if (EquipItemEntry(bot, entry))
+                if (EquipItemEntry(bot, entry, slot))
                     return entry;
         }
         return 0;
-    }
-
-    // Removes everything currently equipped except the cosmetic shirt/tabard so
-    // a re-gear starts from a clean set of slots.
-    void ClearEquipment(Player* bot)
-    {
-        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
-        {
-            if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
-                continue;
-            if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
-                bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
-        }
     }
 
     // Picks class/role-appropriate weapons (and shield/offhand/ranged).
@@ -3111,9 +3119,6 @@ namespace
         uint8 const fallbackArmor = primaryArmor == ITEM_SUBCLASS_ARMOR_PLATE
             ? uint8(ITEM_SUBCLASS_ARMOR_MAIL) : 0;
 
-        if (!g_gearRoll.incremental)
-            ClearEquipment(bot);
-
         // Best equippable item for a slot, optionally excluding an already-picked
         // entry (used to place two distinct rings/trinkets).
         auto equipOne = [&](std::string const& where, uint32 exclude, uint8 slot) -> uint32
@@ -3129,22 +3134,23 @@ namespace
             if (equipOne(plateOrPrimary, 0, equipSlot))
                 return;
 
-            if (!fallbackArmor)
-                return;
-
             std::string const mail =
                 "class=4 AND subclass=" + std::to_string(uint32(fallbackArmor)) + slot;
-            if (equipOne(mail, 0, equipSlot))
+            if (fallbackArmor && equipOne(mail, 0, equipSlot))
                 return;
 
-            // Starter mail/plate is often white. The green+ band leaves those slots empty.
+            // Every armor class needs a white starter fallback, not just plate/mail.
+            // Do not weaken the requested quality for an already equipped slot.
+            if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, equipSlot))
+                return;
             if (minQuality <= int(ITEM_QUALITY_NORMAL))
                 return;
 
             if (EquipBestForSlot(bot, plateOrPrimary, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality,
                 equipSlot))
                 return;
-            EquipBestForSlot(bot, mail, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality, equipSlot);
+            if (fallbackArmor)
+                EquipBestForSlot(bot, mail, primary, 0, int(ITEM_QUALITY_NORMAL), maxQuality, equipSlot);
         };
 
         equipArmorSlot("InventoryType=1", EQUIPMENT_SLOT_HEAD);
@@ -3175,11 +3181,24 @@ namespace
         if (hasGearBag)
         {
             BotGearSets::ClearStoredSet(bot);
+            std::vector<std::pair<uint8, uint64>> originalGear;
+            for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+                if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                    originalGear.emplace_back(slot, item->GetGUID());
             {
                 ScopedGearPool pvp(GearPool::PvpOnly);
                 GearBot(bot, role, specId, minQuality, maxQuality);
             }
             BotGearSets::StoreEquippedAsPvpSet(bot);
+            // The PvP pass may have bagged the old PvE gear. Restore it before
+            // selecting PvE replacements, including when that pool is empty.
+            for (auto const& worn : originalGear)
+                if (Item* item = bot->GetItemByGuid(worn.second))
+                {
+                    uint16 const dest = uint16(INVENTORY_SLOT_BAG_0) << 8 | worn.first;
+                    if (item->GetPos() != dest)
+                        bot->SwapItem(item->GetPos(), dest);
+                }
         }
 
         ScopedGearPool pve(GearPool::PveOnly);
@@ -3514,6 +3533,10 @@ void PlayerbotMgr::InitializeBot(Player* bot, int roleOverride, uint32 specOverr
         it->second->ResetGearSet();
         it->second->AfterInitRelocate(teleport);
     }
+
+    // Deferred first-login jobs must also count as initialized. Otherwise the
+    // ungeared sweep repeats init on starter-quality gear and loses the rolled role.
+    _autoInited.insert(bot->GetGUID());
 
     SF_LOG_INFO("modules",
         "[mod-playerbots] Initialized bot '%s': level %u %s %s, spec %s (%s), gear %s-%s%s.",

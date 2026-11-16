@@ -80,7 +80,7 @@ created characters are picked up by the random-bot pool automatically.
 `.playerbots init` re-gears an active bot for its **current level** and spec
 (level is unchanged unless you pass `relevel`):
 
-* Existing equipment (except shirt/tabard) is cleared and each slot is refilled
+* Existing equipment is preserved until a replacement is successfully equipped; each slot is filled
   with the best uncommon-to-epic item the bot can equip, biased toward the
   spec's primary stat (STR/AGI/INT). Armor slots prefer the heaviest armor type
   the class can wear at that level; weapons/shields/off-hands/ranged are chosen
