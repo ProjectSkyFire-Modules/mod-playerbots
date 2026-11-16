@@ -36,6 +36,10 @@ public:
     // Called every world tick (from the module's WorldScript::OnUpdate).
     void Update(uint32 diff);
 
+    // Immutable during parallel map updates; rebuilt on the world thread
+    // after the map-update barrier. GUIDs are resolved before use.
+    std::vector<uint64> const& GetRealPlayerGuids() const { return _realPlayerGuids; }
+
     // Ticks a single bot's AI (from PlayerScript::OnUpdate).
     void UpdateBotAI(Player* bot, uint32 diff);
     // Player object is going away — drop self-bot / AI so a relog cannot tick
@@ -386,6 +390,7 @@ private:
     // Role/spec remembered at create when InitOnCreate=0; applied on first login.
     std::unordered_map<uint64, PendingBotInit> _deferredInits;
 
+    std::vector<uint64> _realPlayerGuids;
     std::unordered_map<uint64 /*characterGuid*/, WorldSession*> _bots;
     std::unordered_map<uint64 /*characterGuid*/, PlayerbotAI*> _ai;
     std::unordered_set<uint64 /*characterGuid*/> _randomBots; // subset managed by the pool

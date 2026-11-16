@@ -262,6 +262,17 @@ void PlayerbotMgr::Update(uint32 diff)
     if (!_enabled)
         return;
 
+    // OnWorldUpdate runs after MapManager's update barrier. Map workers read
+    // this snapshot next tick; never modify it from a player/map callback.
+    _realPlayerGuids.clear();
+    for (auto const& entry : sWorld->GetAllSessions())
+    {
+        WorldSession* session = entry.second;
+        Player* player = session && !session->IsBot() ? session->GetPlayer() : nullptr;
+        if (player && player->IsInWorld())
+            _realPlayerGuids.push_back(player->GetGUID());
+    }
+
     // Drop bots whose player has left the world for any reason.
     CleanupDeadBots();
 

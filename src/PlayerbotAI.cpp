@@ -44,6 +44,7 @@
 #include "PetDefines.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "BotUpdateSchedule.h"
 #include "SharedDefines.h"
 #include "SpellAuraDefines.h"
 #include "SpellAuras.h"
@@ -77,7 +78,7 @@ namespace
 {
     // How often (ms) the bot re-evaluates its behaviour. Kept coarse to keep the
     // per-tick cost of large bot populations low.
-    constexpr uint32 BOT_AI_UPDATE_INTERVAL = 500;
+    constexpr uint32 BOT_AI_UPDATE_INTERVAL = BotUpdateSchedule::Interval;
     constexpr uint32 BOT_STRANDED_CHECK_INTERVAL = 30000;
 
     // Auto Shot / wand stay on CURRENT_AUTOREPEAT forever. Callers that mean
@@ -341,7 +342,7 @@ namespace
 }
 
 PlayerbotAI::PlayerbotAI(Player* bot, bool clientControlled)
-    : _bot(bot), _clientControlled(clientControlled), _updateTimer(0), _chaseGuid(0),
+    : _bot(bot), _clientControlled(clientControlled), _updateTimer(BotUpdateSchedule::InitialOffset(bot ? bot->GetGUID() : 0)), _chaseGuid(0),
       _autoShotGuid(0), _debugLastMs(0), _followGuid(0), _lootGuid(0), _wanderTimer(0),
       _stay(false), _food(true), _loot(true), _quests(false),
       _passive(false), _grind(false),
@@ -1387,8 +1388,7 @@ void PlayerbotAI::UpdateAI(uint32 diff)
         return;
     }
 
-    _updateTimer += diff;
-    if (_updateTimer < BOT_AI_UPDATE_INTERVAL)
+    if (!BotUpdateSchedule::Advance(_updateTimer, diff))
         return;
 
     // Wander pauses are tracked in real time so they don't depend on the AI
@@ -1397,8 +1397,6 @@ void PlayerbotAI::UpdateAI(uint32 diff)
         _wanderTimer -= BOT_AI_UPDATE_INTERVAL;
     else
         _wanderTimer = 0;
-
-    _updateTimer = 0;
 
     // A bot on a map tile/area that does not exist triggers "discovered unknown
     // area" / "Wrong area flag" spam and can never path anywhere.
@@ -7977,6 +7975,9 @@ void PlayerbotAI::SyncPhaseWithMaster(Unit* master)
     // Alive-player ghost visibility. If these flags are wrong, CanSeeOrDetect
     // falls into the "need IsGroupVisibleFor" branch — invite appears to "fix"
     // visibility even when phases already match.
+    bool const ghostVisibilityChanged =
+        _bot->m_serverSideVisibility.GetValue(SERVERSIDE_VISIBILITY_GHOST) != (GHOST_VISIBILITY_ALIVE | GHOST_VISIBILITY_GHOST)
+        || _bot->m_serverSideVisibilityDetect.GetValue(SERVERSIDE_VISIBILITY_GHOST) != GHOST_VISIBILITY_ALIVE;
     _bot->m_serverSideVisibility.SetValue(SERVERSIDE_VISIBILITY_GHOST,
         GHOST_VISIBILITY_ALIVE | GHOST_VISIBILITY_GHOST);
     _bot->m_serverSideVisibilityDetect.SetValue(SERVERSIDE_VISIBILITY_GHOST,
@@ -8005,7 +8006,9 @@ void PlayerbotAI::SyncPhaseWithMaster(Unit* master)
         _bot->RebuildWorldMapAreaSwaps();
     }
 
-    if (_bot->IsInWorld())
+    // A full nearby-object refresh is needed only when visibility actually
+    // changes. Keep the targeted viewer refresh below for client recovery.
+    if (_bot->IsInWorld() && (!phasesMatch || ghostVisibilityChanged))
         _bot->UpdateObjectVisibility(true);
 
     if (viewer && viewer->IsInWorld() && viewer->GetMap() == _bot->GetMap())
@@ -8050,11 +8053,12 @@ void PlayerbotAI::EnsureVisiblePhases()
         // Same-map nearest real player (no short range cap — grouped bots already
         // synced at any distance; ungrouped .summon / world bots need that too).
         float bestDist = std::numeric_limits<float>::max();
-        SF_SHARED_GUARD readGuard(*HashMapHolder<Player>::GetLock());
-        HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
-        for (HashMapHolder<Player>::MapType::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        // Published by the world thread between map-update passes. The list
+        // excludes bots, avoiding a population-squared scan on every AI tick.
+        // Resolve GUIDs again so logout and map changes cannot leave pointers.
+        for (uint64 guid : sPlayerbotMgr->GetRealPlayerGuids())
         {
-            Player* player = itr->second;
+            Player* player = ObjectAccessor::FindPlayer(guid);
             if (!player || player == _bot || !player->IsInWorld())
                 continue;
             if (player->GetMap() != _bot->GetMap())
