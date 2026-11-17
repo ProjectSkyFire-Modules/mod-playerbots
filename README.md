@@ -32,6 +32,38 @@ This module is being ported in phases. What is present today:
 * Per-spec rotation framework under `src/rotations/` (Hekili `.simc` as offline
   reference).
 
+### Guilds and charters
+
+Offer a guild charter to an online bot through the normal client interface, or
+invite it with `/ginvite BotName`. Socketless bots sign eligible charters and
+accept eligible invitations automatically. Turning in a charter adds its bot
+signers through the core's normal guild creation process. Membership is saved
+in the character database and survives bot logout and server restarts.
+
+`Playerbots.Guild.SignCharters` and `Playerbots.Guild.AcceptInvites` default to
+`1`; set either to `0` in `playerbots.conf` and use `.playerbots reload` to
+disable that response. Dedicated accounts matching `RandomBots.AccountPrefix`
+can be recruited by any eligible player. Human-owned alt bots respond only to
+their account owner or a GM. Self-bot players retain manual control.
+
+Normal core rules still apply, including faction restrictions, existing guild
+membership, pending invitations, and **one charter signature per account**.
+Use bots from different accounts for multiple signatures. Bots do not leave an
+existing guild automatically. No database migration is needed.
+
+Requires a core with `WorldSession::SetPacketObserver` (SkyFire commit
+`d4b0e568ba` or later). Social responses run on the world thread, including for
+throttled bots; pending requests expire after 30 seconds and are discarded on
+relogin. The queue is bounded at 1,024 requests, processed at most 16 per tick;
+offers dropped during saturation can be sent again.
+
+Validation: `tests/BotGuildPacketsTests.cpp` uses core ByteBuffer headers to
+check charter decoding, duplicate-signature notifications, truncated packets,
+GUID encoding, and signature requests. For an in-game check, offer a charter
+to bots from different accounts, turn it in, then log a member bot out and in
+and check the guild roster. Also test `/ginvite` and verify same-account and
+opposite-faction charter offers still obey the core rules.
+
 ### Self-bot mode
 
 `.playerbots self` attaches AI to **your** character without replacing the

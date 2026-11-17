@@ -11,6 +11,14 @@
 
 Playerbots.Enable = 0
 
+# Socketless bots automatically respond to guild invitations and charter offers.
+# Dedicated bot accounts (RandomBots.AccountPrefix) can be recruited by players.
+# Human-owned alt bots require their account owner or a GM. Self-bots are excluded.
+# Normal faction, guild membership and one-signature-per-account rules apply.
+# Guild membership is saved by the core and survives bot logout/restart.
+Playerbots.Guild.SignCharters = 1
+Playerbots.Guild.AcceptInvites = 1
+
 #
 #    Playerbots.RandomBots.Enable
 #        Description: Allow the random-bot pool to populate the world with bots

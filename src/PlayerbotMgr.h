@@ -16,12 +16,15 @@
 #include "Define.h"
 #include "BotQuestSpawns.h"
 #include <deque>
+#include <chrono>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 class WorldSession;
+class WorldPacket;
 class Player;
 class PlayerbotAI;
 class Group;
@@ -209,6 +212,24 @@ public:
     void GetBotGuids(std::vector<uint64>& out) const;
 
 private:
+    struct GuildRequest
+    {
+        uint64 bot = 0;
+        uint64 generation = 0;
+        uint64 petition = 0; // zero means a guild invitation
+        uint64 owner = 0;
+        std::chrono::steady_clock::time_point received;
+    };
+    void ObserveGuildPacket(uint64 bot, uint64 generation, WorldPacket const& packet);
+    void ProcessGuildRequests();
+    bool CanRecruitBot(Player* requester, Player* bot) const;
+    bool _signGuildCharters = true;
+    bool _acceptGuildInvites = true;
+    uint64 _nextGuildGeneration = 0;
+    std::unordered_map<uint64, uint64> _guildGenerations;
+    std::mutex _guildRequestsMutex;
+    std::deque<GuildRequest> _guildRequests;
+
     PlayerbotMgr() = default;
     ~PlayerbotMgr() = default;
     PlayerbotMgr(PlayerbotMgr const&) = delete;

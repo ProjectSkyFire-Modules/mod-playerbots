@@ -10,6 +10,7 @@
 #include "AccountMgr.h"
 #include "BotEnchants.h"
 #include "BotGearSets.h"
+#include "BotGuildPackets.h"
 #include "BotPreferredMounts.h"
 #include "BotStatWeights.h"
 #include "BotTeleportMaps.h"
@@ -108,6 +109,8 @@ void PlayerbotMgr::LoadConfig()
             configPath.c_str());
 
     _enabled = sConfigMgr->GetBoolDefault("Playerbots.Enable", false);
+    _signGuildCharters = sConfigMgr->GetBoolDefault("Playerbots.Guild.SignCharters", true);
+    _acceptGuildInvites = sConfigMgr->GetBoolDefault("Playerbots.Guild.AcceptInvites", true);
     _randomBotsEnabled = sConfigMgr->GetBoolDefault("Playerbots.RandomBots.Enable", false);
     _maxRandomBots = uint32(sConfigMgr->GetIntDefault("Playerbots.RandomBots.MaxBots", 0));
     _accountPrefix = sConfigMgr->GetStringDefault("Playerbots.RandomBots.AccountPrefix", "RNDBOT");
@@ -295,6 +298,88 @@ void PlayerbotMgr::LoadQuestSpawns()
     SF_LOG_INFO("modules", "[mod-playerbots] Indexed %u quest travel spawn positions; AI lookups require no SQL.", count);
 }
 
+void PlayerbotMgr::ObserveGuildPacket(uint64 bot, uint64 generation, WorldPacket const& packet)
+{
+    // Called by SendPacket, potentially on a map worker. Never touch Player,
+    // guild state, configuration, or the database here.
+    if (packet.GetOpcode() != SMSG_GUILD_INVITE && packet.GetOpcode() != SMSG_PETITION_SHOW_SIGNATURES)
+        return;
+    GuildRequest request;
+    request.bot = bot;
+    request.generation = generation;
+    request.received = std::chrono::steady_clock::now();
+    if (packet.GetOpcode() == SMSG_PETITION_SHOW_SIGNATURES)
+    {
+        BotGuildPackets::Offer offer;
+        if (!BotGuildPackets::ReadOffer(packet, bot, offer) || offer.alreadySigned)
+            return;
+        request.petition = offer.petition;
+        request.owner = offer.owner;
+    }
+    std::lock_guard<std::mutex> lock(_guildRequestsMutex);
+    for (auto const& queued : _guildRequests)
+        if (queued.bot == bot && queued.generation == generation && queued.petition == request.petition)
+            return;
+    if (_guildRequests.size() < 1024)
+        _guildRequests.push_back(request);
+}
+
+bool PlayerbotMgr::CanRecruitBot(Player* requester, Player* bot) const
+{
+    if (!requester || !requester->IsInWorld() || !requester->GetSession() || requester->GetSession()->IsBot())
+        return false;
+    // Public pool bots can join anyone eligible. Human-owned alts may only be
+    // recruited by their owner or a GM; self-bots never install this observer.
+    return requester->GetSession()->GetAccountId() == bot->GetSession()->GetAccountId() ||
+        requester->GetSession()->GetSecurity() >= AccountTypes::SEC_GAMEMASTER ||
+        IsBotAccount(bot->GetSession()->GetAccountId());
+}
+
+void PlayerbotMgr::ProcessGuildRequests()
+{
+    // Bound synchronous core guild/petition work per tick, independently of
+    // population size and AI activity throttling. No idle-bot database polls.
+    std::deque<GuildRequest> requests;
+    {
+        std::lock_guard<std::mutex> lock(_guildRequestsMutex);
+        while (!_guildRequests.empty() && requests.size() < 16)
+        {
+            requests.push_back(_guildRequests.front());
+            _guildRequests.pop_front();
+        }
+    }
+    for (auto const& request : requests)
+    {
+        if (std::chrono::steady_clock::now() - request.received > std::chrono::seconds(30))
+            continue;
+        auto generation = _guildGenerations.find(request.bot);
+        auto found = _bots.find(request.bot);
+        if (generation == _guildGenerations.end() || generation->second != request.generation || found == _bots.end())
+            continue;
+        WorldSession* session = found->second;
+        Player* bot = session->GetPlayer();
+        if (!session->IsBot() || !bot || !bot->IsInWorld() || bot->GetGuildId())
+            continue;
+        if (request.petition)
+        {
+            if (!_signGuildCharters || bot->GetGuildIdInvited() ||
+                !CanRecruitBot(ObjectAccessor::FindPlayer(request.owner), bot))
+                continue;
+            WorldPacket sign(CMSG_PETITION_SIGN);
+            BotGuildPackets::WriteSignature(sign, request.petition);
+            session->HandlePetitionSignOpcode(sign);
+        }
+        else if (_acceptGuildInvites && bot->GetGuildIdInvited())
+        {
+            WorldPacket response;
+            if (CanRecruitBot(ObjectAccessor::FindPlayer(bot->GetLastGuildInviterGUID()), bot))
+                session->HandleGuildAcceptOpcode(response);
+            else
+                session->HandleGuildDeclineOpcode(response);
+        }
+    }
+}
+
 void PlayerbotMgr::Update(uint32 diff)
 {
     if (!_enabled)
@@ -316,6 +401,7 @@ void PlayerbotMgr::Update(uint32 diff)
 
     // Drop bots whose player has left the world for any reason.
     CleanupDeadBots();
+    ProcessGuildRequests();
 
     // Alt bots of a player who logged out: logged out now, which saves them.
     if (!_pendingAltLogouts.empty())
@@ -714,6 +800,7 @@ void PlayerbotMgr::CleanupDeadBots()
         {
             uint64 guid = it->first;
             it = _bots.erase(it);
+            _guildGenerations.erase(guid);
             _randomBots.erase(guid);
             DestroyBotAI(guid);
             delete session;
@@ -1338,6 +1425,12 @@ void PlayerbotMgr::FinishSpawnBot(PendingBotLogin& pending)
     }
 
     _bots[characterGuid] = botSession;
+    uint64 const guildGeneration = ++_nextGuildGeneration;
+    _guildGenerations[characterGuid] = guildGeneration;
+    botSession->SetPacketObserver([this, characterGuid, guildGeneration](WorldPacket const& packet)
+    {
+        ObserveGuildPacket(characterGuid, guildGeneration, packet);
+    });
     if (isRandom)
         _randomBots.insert(characterGuid);
 
@@ -1639,6 +1732,7 @@ bool PlayerbotMgr::RemoveBot(uint64 characterGuid)
 
     WorldSession* botSession = it->second;
     _bots.erase(it);
+    _guildGenerations.erase(characterGuid);
     _randomBots.erase(characterGuid);
     DestroyBotAI(characterGuid);
 
@@ -1668,6 +1762,11 @@ void PlayerbotMgr::LogoutAllBots()
         delete pair.second;
 
     _bots.clear();
+    _guildGenerations.clear();
+    {
+        std::lock_guard<std::mutex> lock(_guildRequestsMutex);
+        _guildRequests.clear();
+    }
     _randomBots.clear();
     _selfBots.clear();
 }
