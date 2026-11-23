@@ -245,6 +245,7 @@ public:
         static std::vector<ChatCommand> playerbotCommandTable =
         {
             { "status", rbac::RBAC_PERM_COMMAND_GM, true, &HandlePlayerbotStatusCommand, "", },
+            { "godparty", rbac::RBAC_PERM_COMMAND_CHEAT_GOD, false, &HandlePlayerbotGodPartyCommand, "Syntax: .playerbots godparty on|off|status", },
             { "god", rbac::RBAC_PERM_COMMAND_CHEAT_GOD, true, &HandlePlayerbotGodCommand, "Syntax: .playerbots god <name> on|off|status", },
             { "add",    rbac::RBAC_PERM_COMMAND_GM, true, &HandlePlayerbotAddCommand,    "", },
             { "remove", rbac::RBAC_PERM_COMMAND_GM, true, &HandlePlayerbotRemoveCommand, "", },
@@ -262,6 +263,56 @@ public:
             { "playerbots", rbac::RBAC_PERM_COMMAND_GM, true, NULL, "", playerbotCommandTable },
         };
         return commandTable;
+    }
+
+    static bool HandlePlayerbotGodPartyCommand(ChatHandler* handler, char const* args)
+    {
+        std::istringstream stream(args ? args : "");
+        std::string mode, extra;
+        if (!(stream >> mode) || (stream >> extra) ||
+            (mode != "on" && mode != "off" && mode != "status"))
+        {
+            handler->SendSysMessage("Syntax: .playerbots godparty on|off|status");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Player* issuer = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        Group* group = issuer ? issuer->GetGroup() : nullptr;
+        if (!group)
+        {
+            handler->SendSysMessage("You must be in a party or raid.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 enabled = 0, disabled = 0, skipped = 0;
+        for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
+        {
+            Player* member = itr->GetSource();
+            if (!member || !member->GetSession() ||
+                (member != issuer && (!member->GetSession()->IsBot() || !sPlayerbotMgr->IsBot(member->GetGUID()))))
+            {
+                ++skipped;
+                continue;
+            }
+            if (member != issuer && handler->HasLowerSecurity(member, 0))
+            {
+                ++skipped;
+                continue;
+            }
+            if (mode == "on")
+                member->SetCommandStatusOn(CHEAT_GOD);
+            else if (mode == "off")
+                member->SetCommandStatusOff(CHEAT_GOD);
+            if (member->GetCommandStatus(CHEAT_GOD))
+                ++enabled;
+            else
+                ++disabled;
+        }
+        handler->PSendSysMessage("Party godmode: %u ON, %u OFF, %u skipped. Includes you and online socket bots; resets on logout.",
+            enabled, disabled, skipped);
+        return true;
     }
 
     static bool HandlePlayerbotGodCommand(ChatHandler* handler, char const* args)

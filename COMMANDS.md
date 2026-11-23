@@ -392,3 +392,5 @@ Closest equivalents for older one-shot orders:
 5. `.playerbots init` after leveling to refresh gear/spec (use `enhancement` / `feral` / `moonkin` when you need a specific hybrid DPS tree).
 
 See `README.md` for build/config and `PORTING.md` for port status and backlog.
+
+Party/raid godmode: `.playerbots godparty on|off|status` affects yourself and online socket bots in your group. Requires godmode permission and checks bot security. Other human players and self-bots are skipped. In-game only; resets on logout.
