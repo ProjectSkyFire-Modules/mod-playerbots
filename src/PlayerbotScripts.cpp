@@ -245,6 +245,7 @@ public:
         static std::vector<ChatCommand> playerbotCommandTable =
         {
             { "status", rbac::RBAC_PERM_COMMAND_GM, true, &HandlePlayerbotStatusCommand, "", },
+            { "god", rbac::RBAC_PERM_COMMAND_CHEAT_GOD, true, &HandlePlayerbotGodCommand, "Syntax: .playerbots god <name> on|off|status", },
             { "add",    rbac::RBAC_PERM_COMMAND_GM, true, &HandlePlayerbotAddCommand,    "", },
             { "remove", rbac::RBAC_PERM_COMMAND_GM, true, &HandlePlayerbotRemoveCommand, "", },
             { "summon", rbac::RBAC_PERM_COMMAND_GM, false, &HandlePlayerbotSummonCommand, "", },
@@ -261,6 +262,40 @@ public:
             { "playerbots", rbac::RBAC_PERM_COMMAND_GM, true, NULL, "", playerbotCommandTable },
         };
         return commandTable;
+    }
+
+    static bool HandlePlayerbotGodCommand(ChatHandler* handler, char const* args)
+    {
+        std::istringstream stream(args ? args : "");
+        std::string name, mode, extra;
+        if (!(stream >> name >> mode) || (stream >> extra) ||
+            (mode != "on" && mode != "off" && mode != "status") || !normalizePlayerName(name))
+        {
+            handler->SendSysMessage("Syntax: .playerbots god <name> on|off|status");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Player* bot = ObjectAccessor::FindPlayerByName(name);
+        if (!bot || !bot->GetSession() || !bot->GetSession()->IsBot() ||
+            !sPlayerbotMgr->IsBot(bot->GetGUID()))
+        {
+            handler->PSendSysMessage("'%s' is not an online socket bot.", name.c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (handler->HasLowerSecurity(bot, 0))
+            return false;
+
+        if (mode == "on")
+            bot->SetCommandStatusOn(CHEAT_GOD);
+        else if (mode == "off")
+            bot->SetCommandStatusOff(CHEAT_GOD);
+
+        handler->PSendSysMessage("Bot '%s': godmode %s (until logout).", bot->GetName().c_str(),
+            bot->GetCommandStatus(CHEAT_GOD) ? "ON" : "OFF");
+        return true;
     }
 
     static bool HandlePlayerbotStatusCommand(ChatHandler* handler, char const* /*args*/)

@@ -15,6 +15,7 @@ Whisper replies with a short ack. Party/raid orders apply silently (no spam).
 | --- | --- |
 | `.playerbots status` | Module on/off, random-bot counts, pending logins, login/init pacing. |
 | `.playerbots list` | Names/GUIDs of active (socket) bots. |
+| `.playerbots god <name> on\|off\|status` | Enable, disable, or inspect damage immunity for one online socket bot. Requires the core godmode permission in addition to access to playerbot commands; also available through console/SOAP. Does not change GM mode, heal, or resurrect the bot. Resets on logout/restart; real players and self-bots are rejected. |
 | `.playerbots add <name>` | Log an offline character in as a full bot session. The login runs in the background (no server freeze): the command answers `Logging in bot '<name>'...`, then `Bot '<name>' logged in.` once the character is loaded. The bot is not invited to your group. When you log out, every bot on **your own account** logs out with you (saved), so logging into one of those characters next loads where it really is. Random-pool bots and bots from other accounts stay online. |
 | `.playerbots remove <name>` | Log that bot out and free its session. |
 | `.playerbots summon` | Teleport all bots in your group to you. |
